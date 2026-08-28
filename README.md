@@ -49,6 +49,17 @@ This compiles all 6502 assembly routines, packs the ProDOS disk image into `vera
 
 ---
 
+## 🙏 Special Acknowledgements & Credits
+
+Special thanks to the original creators and contributors whose work made VERA and its TypeScript emulation possible:
+
+Frank van den Hoef – Creator and hardware designer of the VERA FPGA system.
+Michael Steil – Commander X16 emulator architecture and core implementation.
+David Murray (The 8-Bit Guy) – Creator and visionary of the Commander X16 project.
+Michael Morrison – Porting the VERA core to TypeScript and adapting it for Apple II / web emulation.
+
+---
+
 ## 📜 License
 
 MIT License. Created by [anomixer](https://github.com/anomixer).
