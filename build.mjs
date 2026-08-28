@@ -916,7 +916,7 @@ const buildStartupBasic = () => {
   // Tokens: TEXT=0x89, HOME=0x97, PRINT=0xBA, POKE=0xB9, PEEK=0xE2, IF=0xAD, = = 0xD0, THEN=0xC4, AND=0xCD, GOTO=0xAB, GOSUB=0xB0, RETURN=0xB1, INPUT=0x84, CHR$=0xE7, END=0x80
   addLine(10, [0x89].flat()) // 10 TEXT
   addLine(15, [0x97].flat()) // 15 HOME
-  addLine(20, [0xBA, S(' "VERA GRAPHICS TEST DEMO FOR APPLE2TS"')].flat())
+  addLine(20, [0xBA, S(' "VERA GRAPHICS TEST DEMO FOR APPLE II"')].flat())
   addLine(22, [0xBA, S(' "BY ANOMIXER https://github.com/anomixer"')].flat())
   addLine(25, [0xBA, S(' "---------------------------------------"')].flat())
 
