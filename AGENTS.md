@@ -61,9 +61,9 @@ The sound demo in `SPRSND.BIN` runs a 32-step arcade chiptune engine written in 
 
 ---
 
-## 🛠️ 4. Build System & Toolchain (`build.mjs`)
+## 🛠️ 4. Build System & Modular Architecture (`src/` & `build.mjs`)
 
-The project uses a pure Node.js zero-dependency build script:
+The project uses a pure Node.js zero-dependency, fully modular build architecture:
 
 ```bash
 # Build the ProDOS disk image and preview screenshot
@@ -72,20 +72,45 @@ npm run build
 node build.mjs
 ```
 
-### Key Technical Achievements in `build.mjs`:
-1. **Unified Single-Pass 6502 Instruction Encoder (`getEncodedBytes`)**:
-   - Guarantees 100% identical byte-length calculations between Pass 1 (symbol resolution) and Pass 2 (code emission), eliminating branch displacement bugs.
-2. **ProDOS 2.4.3 File System Engine**:
+### 4.1 Project Directory Structure
+```text
+veratest/
+├── build.mjs             # Ultra-lean build pipeline (~160 lines): orchestrates assembly, builds ProDOS, renders PNG
+├── veratest.po           # 140KB ProDOS 2.4.3 bootable disk image
+├── veratest.png          # 560x384 preview screenshot for Apple2TS Disk Collection
+└── src/
+    ├── asm6502.mjs       # [Standalone 6502 Assembler Engine] Two-Pass, labels, addressing modes, instruction encoder
+    ├── applebasic.mjs    # [Standalone Applesoft BASIC Compiler] Tokenizer & memory-linked binary compiler
+    ├── applebasic.inc    # Applesoft BASIC keyword token definitions ($80 ~ $EA)
+    ├── startup.bas       # [Plain-text] Human-readable Applesoft BASIC startup menu & hardware probe script
+    ├── vera.inc          # VERA register offsets and Apple II hardware softswitch constants
+    ├── sprite.asm        # 16-Sprite 4bpp glowing crystal alien bouncing animation
+    ├── spritesnd.asm     # 16-Sprite + 4-Voice stereo PSG chiptune audio player
+    ├── mode7.asm         # Mode 7 256-color fullscreen bitmap with 6502 RLE decompressor
+    ├── rainbow_rle.mjs   # Mode 7 256-color rainbow pattern generator and RLE compressor
+    └── preview.mjs       # Standalone 560x384 PNG preview screenshot generator and CRC32 encoder
+```
+
+### 4.2 Key Technical Achievements:
+1. **Dedicated 6502 Assembler Module (`src/asm6502.mjs`)**:
+   - Two-pass assembler guaranteeing identical byte-length calculations between symbol resolution and code emission.
+   - Supports standard assembly comments (`;` and `//`), equate definitions (`EQU`, `=`), and hex data formats (`HEX`, `!byte`, `.byte`).
+   - Dynamically injects slot base constants (`VERA_BASE = $C200` or `$C400`) from `src/vera.inc`.
+2. **Dedicated Applesoft BASIC Compiler (`src/applebasic.mjs`)**:
+   - Parses plain-text `startup.bas` directly into native Apple II binary memory-linked format (`NextPtr[2] + LineNo[2] + Tokens + 0x00`), eliminating manual hex token authoring.
+3. **ProDOS 2.4.3 File System Engine**:
    - Formats standard 140KB ProDOS 2.4.3 disks with proper Volume Header, Block allocation bitmap, and file entry pointers.
    - Enforces sector boundary checks (`offset + 0x27 <= 512`) to prevent sector table corruption.
    - Sets Access Byte to `$C3` (unlocked) to ensure all binary routines and BASIC scripts can be read, written, and executed.
-3. **Applesoft BASIC `STARTUP` Program**:
+4. **Applesoft BASIC `STARTUP` Program (`src/startup.bas`)**:
    - Implements bulletproof dual-port signature probing across Slot 2 and Slot 4:
      ```basic
-     100 REM PROBE SLOT 2 & 4
-     110 POKE 49669,0: POKE 49664,85: REM VERA_CTRL=0, ADDR_L=$55
-     120 POKE 49669,1: POKE 49664,170: REM VERA_CTRL=1, ADDR_L=$AA
-     130 POKE 49669,0: IF PEEK(49664)=85 THEN S=2: GOTO 200
+     30 S = 0
+     31 POKE 49669,1: IF PEEK(49669) = 1 THEN GOTO 34: GOTO 45
+     34 POKE 49669,0: IF PEEK(49669) = 0 THEN GOTO 37: GOTO 45
+     37 POKE 49664,0: POKE 49665,0: POKE 49666,0: POKE 49667,222
+     41 IF PEEK(49667) = 222 THEN GOTO 43: GOTO 45
+     43 POKE 49667,111: IF PEEK(49667) = 111 THEN S = 2
      ```
    - Automatically executes the corresponding Slot 2 or Slot 4 binary routines (`SPRITE.BIN`, `SPRSND.BIN`, `MODE7.BIN`).
 
@@ -110,3 +135,9 @@ node build.mjs
 4. **4-Voice Polyphonic Sound**: Engineered full PSG chiptune player with stereo panning and dynamic envelope decay.
 5. **Standalone Repository**: Extracted build tool into `anomixer/veratest` with GitHub Actions and release distribution.
 6. **PR #395 Submission**: Opened upstream Pull Request to `ct6502/apple2ts`.
+7. **Full Modular Architecture Refactoring**:
+   - Extracted 6502 assembly sources into standalone files (`src/sprite.asm`, `src/spritesnd.asm`, `src/mode7.asm`, `src/vera.inc`).
+   - Extracted Applesoft BASIC menu into human-readable plain-text `src/startup.bas` with token definitions `src/applebasic.inc`.
+   - Modularized 6502 assembler and BASIC tokenizer engines into `src/asm6502.mjs` and `src/applebasic.mjs`.
+   - Streamlined `build.mjs` into a lean, readable pipeline script.
+
