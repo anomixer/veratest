@@ -2,7 +2,7 @@
 
 ![VERA Graphics & Sound Demo](veratest.png)
 
-A showcase and test suite demonstrating **VERA (Versatile Embedded Retro Adapter)** FPGA graphics & 16-Voice stereo PSG audio card emulation running on **Apple II** computers (Slot 2 and Slot 4), created for [Apple2TS](https://github.com/anomixer/apple2ts).
+A showcase and test suite demonstrating **VERA (Versatile Embedded Retro Adapter)** FPGA graphics & 16-Voice stereo PSG audio card emulation running on **Apple II** computers (Slot 2 and Slot 4), created for [Apple2TS](https://apple2ts.com).
 
 ---
 
@@ -42,8 +42,8 @@ This compiles all 6502 assembly routines, packs the ProDOS disk image into `vera
 
 ## 🕹️ Running the Demo in Apple2TS
 
-1. Open [Apple2TS](https://github.com/anomixer/apple2ts).
-2. Insert a **VERA** card into **Slot 2** or **Slot 4** in the configuration panel.
+1. Open [Apple2TS](https://apple2ts.com).
+2. Insert a **VERA** card into **Slot 2** or **Slot 4** in the Slot Configuration panel.
 3. Open the **Disk Collection** $\rightarrow$ **New Releases**, and click **VERA Graphics & Sound Demo**.
 4. Open the **VERA Monitor** tab on the right side of the screen to inspect live VERA VRAM, Sprites, and Palette registers!
 
