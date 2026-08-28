@@ -1,0 +1,22 @@
+{
+  "name": "veratest",
+  "version": "1.0.0",
+  "description": "VERA Graphics & 4-Voice PSG Sound Demo Disk for Apple II / Apple2TS",
+  "type": "module",
+  "main": "build.mjs",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "keywords": [
+    "apple2",
+    "appleii",
+    "vera",
+    "commander-x16",
+    "6502",
+    "chiptune",
+    "prodos",
+    "fpga"
+  ],
+  "author": "anomixer (https://github.com/anomixer)",
+  "license": "MIT"
+}
