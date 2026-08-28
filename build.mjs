@@ -17,6 +17,15 @@ const buildMode7Binary = (slot = 2) => {
   return new Uint8Array([...codeBytes, ...rleData])
 }
 
+// Build Mode 4 Tilemap Binary with Palette, Tilemap and Tiles assets
+const buildMode4Binary = (slot = 2) => {
+  const codeBytes = assembleAsmFile(srcDir, "mode4.asm", slot, 0x2000)
+  const pal = fs.readFileSync(path.join(srcDir, "mode4-palette.bin"))
+  const map = fs.readFileSync(path.join(srcDir, "mode4-tilemap.bin"))
+  const til = fs.readFileSync(path.join(srcDir, "mode4-tiles.bin"))
+  return new Uint8Array([...codeBytes, ...pal, ...map, ...til])
+}
+
 // Build ProDOS 2.4.3 Disk Image
 const buildProDosDisk = () => {
   const basePoPath = fs.existsSync(path.join(rootDir, "assets", "ProDOS 2.4.3.po"))
@@ -142,25 +151,37 @@ const buildProDosDisk = () => {
     }
   }
 
-  // 1. Assemble 6502 routines from src/*.asm
-  const sprite2 = assembleAsmFile(srcDir, "sprite.asm", 2, 0x2000)
-  const sprite4 = assembleAsmFile(srcDir, "sprite.asm", 4, 0x2000)
-  const spritesnd2 = assembleAsmFile(srcDir, "spritesnd.asm", 2, 0x2000)
-  const spritesnd4 = assembleAsmFile(srcDir, "spritesnd.asm", 4, 0x2000)
-  const mode72 = buildMode7Binary(2)
-  const mode74 = buildMode7Binary(4)
+  // 1. Assemble 6502 Showcases
+  const sprite2   = assembleAsmFile(srcDir, "sprite.asm", 2, 0x2000)
+  const sprite4   = assembleAsmFile(srcDir, "sprite.asm", 4, 0x2000)
+  const spritesnd2= assembleAsmFile(srcDir, "spritesnd.asm", 2, 0x2000)
+  const spritesnd4= assembleAsmFile(srcDir, "spritesnd.asm", 4, 0x2000)
+  const mode72    = buildMode7Binary(2)
+  const mode74    = buildMode7Binary(4)
+  const mode42    = buildMode4Binary(2)
+  const mode44    = buildMode4Binary(4)
+  const layer2    = assembleAsmFile(srcDir, "layer.asm", 2, 0x2000)
+  const layer4    = assembleAsmFile(srcDir, "layer.asm", 4, 0x2000)
+  const matrix2   = assembleAsmFile(srcDir, "matrix.asm", 2, 0x2000)
+  const matrix4   = assembleAsmFile(srcDir, "matrix.asm", 4, 0x2000)
 
-  // 2. Compile Applesoft BASIC from src/startup.bas
+  // 2. Compile Applesoft BASIC Startup Menu
   const startup = compileApplesoftBasic(srcDir, "startup.bas")
 
-  // 3. Write binary files into ProDOS image
-  addFile("SPRITE.BIN", 0x06, 0x2000, sprite2)
-  addFile("SPRITE4.BIN", 0x06, 0x2000, sprite4)
-  addFile("SPRSND.BIN", 0x06, 0x2000, spritesnd2)
-  addFile("SPRSND4.BIN", 0x06, 0x2000, spritesnd4)
-  addFile("MODE7.BIN", 0x06, 0x2000, mode72)
-  addFile("MODE74.BIN", 0x06, 0x2000, mode74)
-  addFile("STARTUP", 0xFC, 0x0801, startup)
+  // 3. Write all files into ProDOS image
+  addFile("SPRITE.BIN",   0x06, 0x2000, sprite2)
+  addFile("SPRITE4.BIN",  0x06, 0x2000, sprite4)
+  addFile("SPRSND.BIN",   0x06, 0x2000, spritesnd2)
+  addFile("SPRSND4.BIN",  0x06, 0x2000, spritesnd4)
+  addFile("MODE7.BIN",    0x06, 0x2000, mode72)
+  addFile("MODE74.BIN",   0x06, 0x2000, mode74)
+  addFile("TILEMAP.BIN",  0x06, 0x2000, mode42)
+  addFile("TILEMAP4.BIN", 0x06, 0x2000, mode44)
+  addFile("LAYER.BIN",    0x06, 0x2000, layer2)
+  addFile("LAYER4.BIN",   0x06, 0x2000, layer4)
+  addFile("MATRIX.BIN",   0x06, 0x2000, matrix2)
+  addFile("MATRIX4.BIN",  0x06, 0x2000, matrix4)
+  addFile("STARTUP",      0xFC, 0x0801, startup)
 
   disk[2 * 512 + 0x25] = fileCount & 0xFF
   disk[2 * 512 + 0x26] = (fileCount >> 8) & 0xFF
@@ -169,13 +190,13 @@ const buildProDosDisk = () => {
   fs.writeFileSync(outPathRoot, disk)
   console.log(`\nSuccessfully created 100% genuine ProDOS VERA test disk: ${outPathRoot} (${disk.length} bytes)`)
   console.log(`Total Active Files: ${fileCount}`)
-  console.log(`  - SPRITE.BIN   Size=${sprite2.length} bytes`)
-  console.log(`  - SPRITE4.BIN  Size=${sprite4.length} bytes`)
-  console.log(`  - SPRSND.BIN   Size=${spritesnd2.length} bytes (4-Voice Stereo PSG Chiptune)`)
-  console.log(`  - SPRSND4.BIN  Size=${spritesnd4.length} bytes (4-Voice Stereo PSG Chiptune)`)
-  console.log(`  - MODE7.BIN    Size=${mode72.length} bytes (Instant RLE Rainbow Arc)`)
-  console.log(`  - MODE74.BIN   Size=${mode74.length} bytes (Instant RLE Rainbow Arc)`)
-  console.log(`  - STARTUP      Size=${startup.length} bytes (Compiled from src/startup.bas)`)
+  console.log(`  - SPRITE.BIN / 4   Size=${sprite2.length} bytes (16-Sprite Bouncing)`)
+  console.log(`  - SPRSND.BIN / 4   Size=${spritesnd2.length} bytes (4-Voice Stereo PSG Chiptune)`)
+  console.log(`  - MODE7.BIN / 4    Size=${mode72.length} bytes (Instant RLE Rainbow Arc)`)
+  console.log(`  - TILEMAP.BIN / 4  Size=${mode42.length} bytes (Mode 4 256-Color RPG Tilemap)`)
+  console.log(`  - LAYER.BIN / 4    Size=${layer2.length} bytes (Dual-Layer Electric Storm)`)
+  console.log(`  - MATRIX.BIN / 4   Size=${matrix2.length} bytes (Matrix Digital Rain)`)
+  console.log(`  - STARTUP          Size=${startup.length} bytes (Applesoft BASIC Menu)`)
 
   // Auto-sync to Apple2TS if repo is present
   const apple2tsPublicDisks = path.resolve(rootDir, "../apple2ts/public/disks")

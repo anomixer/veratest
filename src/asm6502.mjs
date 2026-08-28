@@ -40,7 +40,17 @@ export const assemble6502 = (lines, startAddress = 0x2000, extraLabels = {}) => 
         return parseInt(h, 10)
       })
     }
+
+    // Inherent / Implied 1-byte opcodes
     if (instr === "RTS") return [0x60]
+    if (instr === "RTI") return [0x40]
+    if (instr === "NOP") return [0xEA]
+    if (instr === "PHA") return [0x48]
+    if (instr === "PLA") return [0x68]
+    if (instr === "PHP") return [0x08]
+    if (instr === "PLP") return [0x28]
+    if (instr === "TSX") return [0xBA]
+    if (instr === "TXS") return [0x9A]
     if (instr === "TXA") return [0x8A]
     if (instr === "TYA") return [0x98]
     if (instr === "TAX") return [0xAA]
@@ -51,8 +61,55 @@ export const assemble6502 = (lines, startAddress = 0x2000, extraLabels = {}) => 
     if (instr === "DEY") return [0x88]
     if (instr === "CLC") return [0x18]
     if (instr === "SEC") return [0x38]
-    if (instr === "ASL") return [0x0A]
-    if (instr === "LSR") return [0x4A]
+    if (instr === "CLI") return [0x58]
+    if (instr === "SEI") return [0x78]
+    if (instr === "CLD") return [0xD8]
+    if (instr === "SED") return [0xF8]
+    if (instr === "CLV") return [0xB8]
+
+    if (instr === "ASL") {
+      if (!operand || operand === "A") return [0x0A]
+      const val = resolveVal(operand)
+      if (operand.startsWith("$") && operand.length <= 3) return [0x06, val & 0xFF]
+      return [0x0E, val & 0xFF, (val >> 8) & 0xFF]
+    }
+
+    if (instr === "LSR") {
+      if (!operand || operand === "A") return [0x4A]
+      const val = resolveVal(operand)
+      if (operand.startsWith("$") && operand.length <= 3) return [0x46, val & 0xFF]
+      return [0x4E, val & 0xFF, (val >> 8) & 0xFF]
+    }
+
+    if (instr === "ROL") {
+      if (!operand || operand === "A") return [0x2A]
+      const val = resolveVal(operand)
+      if (operand.startsWith("$") && operand.length <= 3) return [0x26, val & 0xFF]
+      return [0x2E, val & 0xFF, (val >> 8) & 0xFF]
+    }
+
+    if (instr === "ROR") {
+      if (!operand || operand === "A") return [0x6A]
+      const val = resolveVal(operand)
+      if (operand.startsWith("$") && operand.length <= 3) return [0x66, val & 0xFF]
+      return [0x6E, val & 0xFF, (val >> 8) & 0xFF]
+    }
+
+    if (instr === "JSR") {
+      const val = resolveVal(operand)
+      return [0x20, val & 0xFF, (val >> 8) & 0xFF]
+    }
+
+    if (instr === "JMP") {
+      const val = resolveVal(operand)
+      return [0x4C, val & 0xFF, (val >> 8) & 0xFF]
+    }
+
+    if (instr === "BIT") {
+      const val = resolveVal(operand)
+      if (operand.startsWith("$") && operand.length <= 3) return [0x24, val & 0xFF]
+      return [0x2C, val & 0xFF, (val >> 8) & 0xFF]
+    }
 
     if (instr === "LDA") {
       if (operand.startsWith("#")) return [0xA9, resolveVal(operand)]
@@ -167,13 +224,8 @@ export const assemble6502 = (lines, startAddress = 0x2000, extraLabels = {}) => 
     if (instr === "CPX") return [0xE0, resolveVal(operand)]
     if (instr === "CPY") return [0xC0, resolveVal(operand)]
 
-    if (instr === "JMP") {
-      const val = resolveVal(operand)
-      return [0x4C, val & 0xFF, (val >> 8) & 0xFF]
-    }
-
-    if (["BNE", "BEQ", "BPL", "BMI", "BCC", "BCS"].includes(instr)) {
-      const opcodes = { BNE: 0xD0, BEQ: 0xF0, BPL: 0x10, BMI: 0x30, BCC: 0x90, BCS: 0xB0 }
+    if (["BNE", "BEQ", "BPL", "BMI", "BCC", "BCS", "BVC", "BVS"].includes(instr)) {
+      const opcodes = { BNE: 0xD0, BEQ: 0xF0, BPL: 0x10, BMI: 0x30, BCC: 0x90, BCS: 0xB0, BVC: 0x50, BVS: 0x70 }
       const target = resolveVal(operand)
       const offset = target - (currentPc + 2)
       return [opcodes[instr], (offset & 0xFF)]

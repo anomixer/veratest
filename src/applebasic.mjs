@@ -150,6 +150,12 @@ export const compileApplesoftBasic = (srcDir, filename) => {
         continue
       }
 
+      // Skip whitespace outside strings
+      if (char === " " || char === "\t") {
+        i++
+        continue
+      }
+
       // Match keyword token outside strings
       let matchedToken = null
       for (const tok of tokenTable) {

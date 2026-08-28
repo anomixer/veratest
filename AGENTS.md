@@ -41,7 +41,9 @@ The VERA registers map to the Apple II Slot I/O space at `$C080 + ($10 * Slot)` 
 
 ### 2.2 VRAM Memory Map (128 KB)
 - `$00000 - $12BFF`: Mode 7 256-Color Fullscreen Bitmap Buffer ($320 \times 240$ 8bpp = 76,800 bytes).
-- `$10000 - $1F7FF`: Sprite Pixel Graphics Patterns (16x16 4bpp Crystal Alien).
+- `$00000 - $00FFF`: Tilemap Buffer for Mode 4 and Text Modes.
+- `$08000 - $09FFF`: Tile Pattern Graphics and Custom Fonts.
+- `$10000 - $1F7FF`: 8bpp Tile Graphics & Sprite Pixel Graphics Patterns.
 - `$1F9C0 - $1F9FF`: 16-Channel Programmable Sound Generator (PSG) Registers.
 - `$1FA00 - $1FBFF`: 256-Color Palette (512 bytes, 12-bit Little-Endian RGB: `[G4 B4] [0 R4]`).
 - `$1FC00 - $1FFFF`: 128 Sprite Attribute Entries (8 bytes per sprite $\times$ 128 = 1024 bytes).
@@ -75,7 +77,7 @@ node build.mjs
 ### 4.1 Project Directory Structure
 ```text
 veratest/
-├── build.mjs             # Ultra-lean build pipeline (~160 lines): orchestrates assembly, builds ProDOS, renders PNG
+├── build.mjs             # Ultra-lean build pipeline: orchestrates assembly, builds ProDOS, renders PNG
 ├── veratest.po           # 140KB ProDOS 2.4.3 bootable disk image
 ├── veratest.png          # 560x384 preview screenshot for Apple2TS Disk Collection
 └── src/
@@ -87,6 +89,9 @@ veratest/
     ├── sprite.asm        # 16-Sprite 4bpp glowing crystal alien bouncing animation
     ├── spritesnd.asm     # 16-Sprite + 4-Voice stereo PSG chiptune audio player
     ├── mode7.asm         # Mode 7 256-color fullscreen bitmap with 6502 RLE decompressor
+    ├── mode4.asm         # Mode 4 256-color RPG tilemap engine with centered castle wandering camera
+    ├── layer.asm         # Dual-Layer parallax deep space starfield & high-speed plasma waves
+    ├── matrix.asm        # The Matrix digital code rain stream simulator with 256-color palette cycling
     ├── rainbow_rle.mjs   # Mode 7 256-color rainbow pattern generator and RLE compressor
     └── preview.mjs       # Standalone 560x384 PNG preview screenshot generator and CRC32 encoder
 ```
@@ -97,22 +102,16 @@ veratest/
    - Supports standard assembly comments (`;` and `//`), equate definitions (`EQU`, `=`), and hex data formats (`HEX`, `!byte`, `.byte`).
    - Dynamically injects slot base constants (`VERA_BASE = $C200` or `$C400`) from `src/vera.inc`.
 2. **Dedicated Applesoft BASIC Compiler (`src/applebasic.mjs`)**:
-   - Parses plain-text `startup.bas` directly into native Apple II binary memory-linked format (`NextPtr[2] + LineNo[2] + Tokens + 0x00`), eliminating manual hex token authoring.
+   - Parses plain-text `startup.bas` directly into native Apple II binary memory-linked format (`NextPtr[2] + LineNo[2] + Tokens + 0x00`).
+   - Strips non-string whitespace (`$20`) matching native Apple II ROM tokenizer behavior, eliminating syntax errors.
 3. **ProDOS 2.4.3 File System Engine**:
    - Formats standard 140KB ProDOS 2.4.3 disks with proper Volume Header, Block allocation bitmap, and file entry pointers.
    - Enforces sector boundary checks (`offset + 0x27 <= 512`) to prevent sector table corruption.
    - Sets Access Byte to `$C3` (unlocked) to ensure all binary routines and BASIC scripts can be read, written, and executed.
 4. **Applesoft BASIC `STARTUP` Program (`src/startup.bas`)**:
-   - Implements bulletproof dual-port signature probing across Slot 2 and Slot 4:
-     ```basic
-     30 S = 0
-     31 POKE 49669,1: IF PEEK(49669) = 1 THEN GOTO 34: GOTO 45
-     34 POKE 49669,0: IF PEEK(49669) = 0 THEN GOTO 37: GOTO 45
-     37 POKE 49664,0: POKE 49665,0: POKE 49666,0: POKE 49667,222
-     41 IF PEEK(49667) = 222 THEN GOTO 43: GOTO 45
-     43 POKE 49667,111: IF PEEK(49667) = 111 THEN S = 2
-     ```
-   - Automatically executes the corresponding Slot 2 or Slot 4 binary routines (`SPRITE.BIN`, `SPRSND.BIN`, `MODE7.BIN`).
+   - Implements dual-port signature probing across Slot 2 and Slot 4.
+   - Caches slot detection (`S > 0`) to skip redundant hardware probing and instantly refresh screen with `TEXT: SPEED=255: HOME`.
+   - Automatically executes corresponding Slot 2 or Slot 4 binary routines (`SPRITE.BIN`, `SPRSND.BIN`, `MODE7.BIN`, `TILEMAP.BIN`, `LAYER.BIN`, `MATRIX.BIN`).
 
 ---
 
@@ -127,7 +126,21 @@ veratest/
 
 ---
 
-## 📜 6. Development Log & Milestones
+## 🙏 6. Special Acknowledgements & Credits
+
+- **[Frank van den Hoef](https://github.com/fvdhoef/vera-module)** – Creator and hardware designer of the VERA FPGA system.
+- **[Michael Steil](https://github.com/mist64)** – Commander X16 emulator architecture and core implementation.
+- **[David Murray (The 8-Bit Guy)](https://www.the8bitguy.com/)** – Creator and visionary of the Commander X16 project.
+- **[Mike Morrison](https://github.com/code-bythepound)** – Porting the VERA core to TypeScript and adapting it for Apple II / web emulation.
+- **[Chris Torrence (ct6502)](https://github.com/ct6502)** – Creator of the [Apple2TS](https://apple2ts.com) web emulator ecosystem.
+- **[Original X16 Demo Authors](https://github.com/X16Community/x16-demo)**:
+  - Mode 4 RPG Tilemap Demo & Graphics Assets.
+  - Scrolling Electricity Dual-Layer Demo.
+  - Matriculate Text 256-Color Palette-Cycling Matrix Engine.
+
+---
+
+## 📜 7. Development Log & Milestones
 
 1. **Initial VERA Core Verification**: Created basic 6502 test harness for VERA registers, dual data ports, and palette loading.
 2. **Sprite Bouncing Engine**: Built 16-sprite 4bpp bouncing animation with 2x hardware scaling.
@@ -140,4 +153,8 @@ veratest/
    - Extracted Applesoft BASIC menu into human-readable plain-text `src/startup.bas` with token definitions `src/applebasic.inc`.
    - Modularized 6502 assembler and BASIC tokenizer engines into `src/asm6502.mjs` and `src/applebasic.mjs`.
    - Streamlined `build.mjs` into a lean, readable pipeline script.
-
+8. **Release v0.0.2: 6-in-1 Flagship Showcase Expansion**:
+   - Mode 4 256-Color RPG Tilemap Engine (`TILEMAP.BIN` / `TILEMAP4.BIN`) with 8bpp color depth and centered castle wandering camera.
+   - Dual-Layer Parallax Scrolling (`LAYER.BIN` / `LAYER4.BIN`) with discrete deep space starfield on Layer 0 and 3x high-speed plasma waves on Layer 1.
+   - The Matrix Digital Code Rain (`MATRIX.BIN` / `MATRIX4.BIN`) using 256-color text mode (`T256C=1`), multi-track asynchronous palette cycling, and live Katakana glitch mutations.
+   - Seamless BASIC menu navigation with text speed restoration (`$F1=255`).
