@@ -31,16 +31,42 @@ export const assemble6502 = (lines, startAddress = 0x2000, extraLabels = {}) => 
       return val
     }
 
-    if (instr === "HEX" || instr === "!BYTE" || instr === ".BYTE") {
+    if (instr === "!WORD" || instr === ".WORD" || instr === "DW" || instr === "DA") {
+      const val = resolveVal(operand)
+      return [val & 0xFF, (val >> 8) & 0xFF]
+    }
+
+    if (instr === "HEX") {
       const hList = operand.split(/[\s,]+/).filter(Boolean)
       return hList.map(h => {
         if (h.startsWith("$")) return parseInt(h.substring(1), 16)
         if (h.startsWith("0x") || h.startsWith("0X")) return parseInt(h, 16)
-        if (/^[0-9A-Fa-f]{2}$/.test(h)) return parseInt(h, 16)
+        return parseInt(h, 16)
+      })
+    }
+
+    if (instr === "!BYTE" || instr === ".BYTE") {
+      const hList = operand.split(/[\s,]+/).filter(Boolean)
+      return hList.map(h => {
+        if (h.startsWith("<") || h.startsWith(">") || h.startsWith("#") || (h in currentLabels)) {
+          return resolveVal(h) & 0xFF
+        }
+        if (h.startsWith("$")) return parseInt(h.substring(1), 16)
+        if (h.startsWith("0x") || h.startsWith("0X")) return parseInt(h, 16)
         return parseInt(h, 10)
       })
     }
+
+    // Inherent / Implied 1-byte opcodes
     if (instr === "RTS") return [0x60]
+    if (instr === "RTI") return [0x40]
+    if (instr === "NOP") return [0xEA]
+    if (instr === "PHA") return [0x48]
+    if (instr === "PLA") return [0x68]
+    if (instr === "PHP") return [0x08]
+    if (instr === "PLP") return [0x28]
+    if (instr === "TSX") return [0xBA]
+    if (instr === "TXS") return [0x9A]
     if (instr === "TXA") return [0x8A]
     if (instr === "TYA") return [0x98]
     if (instr === "TAX") return [0xAA]
@@ -51,8 +77,55 @@ export const assemble6502 = (lines, startAddress = 0x2000, extraLabels = {}) => 
     if (instr === "DEY") return [0x88]
     if (instr === "CLC") return [0x18]
     if (instr === "SEC") return [0x38]
-    if (instr === "ASL") return [0x0A]
-    if (instr === "LSR") return [0x4A]
+    if (instr === "CLI") return [0x58]
+    if (instr === "SEI") return [0x78]
+    if (instr === "CLD") return [0xD8]
+    if (instr === "SED") return [0xF8]
+    if (instr === "CLV") return [0xB8]
+
+    if (instr === "ASL") {
+      if (!operand || operand === "A") return [0x0A]
+      const val = resolveVal(operand)
+      if (operand.startsWith("$") && operand.length <= 3) return [0x06, val & 0xFF]
+      return [0x0E, val & 0xFF, (val >> 8) & 0xFF]
+    }
+
+    if (instr === "LSR") {
+      if (!operand || operand === "A") return [0x4A]
+      const val = resolveVal(operand)
+      if (operand.startsWith("$") && operand.length <= 3) return [0x46, val & 0xFF]
+      return [0x4E, val & 0xFF, (val >> 8) & 0xFF]
+    }
+
+    if (instr === "ROL") {
+      if (!operand || operand === "A") return [0x2A]
+      const val = resolveVal(operand)
+      if (operand.startsWith("$") && operand.length <= 3) return [0x26, val & 0xFF]
+      return [0x2E, val & 0xFF, (val >> 8) & 0xFF]
+    }
+
+    if (instr === "ROR") {
+      if (!operand || operand === "A") return [0x6A]
+      const val = resolveVal(operand)
+      if (operand.startsWith("$") && operand.length <= 3) return [0x66, val & 0xFF]
+      return [0x6E, val & 0xFF, (val >> 8) & 0xFF]
+    }
+
+    if (instr === "JSR") {
+      const val = resolveVal(operand)
+      return [0x20, val & 0xFF, (val >> 8) & 0xFF]
+    }
+
+    if (instr === "JMP") {
+      const val = resolveVal(operand)
+      return [0x4C, val & 0xFF, (val >> 8) & 0xFF]
+    }
+
+    if (instr === "BIT") {
+      const val = resolveVal(operand)
+      if (operand.startsWith("$") && operand.length <= 3) return [0x24, val & 0xFF]
+      return [0x2C, val & 0xFF, (val >> 8) & 0xFF]
+    }
 
     if (instr === "LDA") {
       if (operand.startsWith("#")) return [0xA9, resolveVal(operand)]
@@ -167,15 +240,15 @@ export const assemble6502 = (lines, startAddress = 0x2000, extraLabels = {}) => 
     if (instr === "CPX") return [0xE0, resolveVal(operand)]
     if (instr === "CPY") return [0xC0, resolveVal(operand)]
 
-    if (instr === "JMP") {
-      const val = resolveVal(operand)
-      return [0x4C, val & 0xFF, (val >> 8) & 0xFF]
-    }
-
-    if (["BNE", "BEQ", "BPL", "BMI", "BCC", "BCS"].includes(instr)) {
-      const opcodes = { BNE: 0xD0, BEQ: 0xF0, BPL: 0x10, BMI: 0x30, BCC: 0x90, BCS: 0xB0 }
+    if (["BNE", "BEQ", "BPL", "BMI", "BCC", "BCS", "BVC", "BVS"].includes(instr)) {
+      const opcodes = { BNE: 0xD0, BEQ: 0xF0, BPL: 0x10, BMI: 0x30, BCC: 0x90, BCS: 0xB0, BVC: 0x50, BVS: 0x70 }
       const target = resolveVal(operand)
       const offset = target - (currentPc + 2)
+      if (currentLabels && (operand in currentLabels)) {
+        if (offset < -128 || offset > 127) {
+          throw new Error(`Branch target out of range for ${instr} ${operand}: offset ${offset} at PC $${currentPc.toString(16)}`)
+        }
+      }
       return [opcodes[instr], (offset & 0xFF)]
     }
 
@@ -231,7 +304,8 @@ export const assemble6502 = (lines, startAddress = 0x2000, extraLabels = {}) => 
 
     const parts = line.split(/\s+/)
     const instr = parts[0].toUpperCase()
-    const operand = (instr === "HEX" || instr === "!BYTE" || instr === ".BYTE") ? parts.slice(1).join(" ") : parts.slice(1).join("")
+    const isDataDir = (instr === "HEX" || instr === "!BYTE" || instr === ".BYTE" || instr === "!WORD" || instr === ".WORD" || instr === "DW" || instr === "DA")
+    const operand = isDataDir ? parts.slice(1).join(" ") : parts.slice(1).join("")
     const b = getEncodedBytes(instr, operand, pc, labels)
     pc += b.length
   }
@@ -248,7 +322,8 @@ export const assemble6502 = (lines, startAddress = 0x2000, extraLabels = {}) => 
 
     const parts = line.split(/\s+/)
     const instr = parts[0].toUpperCase()
-    const operand = (instr === "HEX" || instr === "!BYTE" || instr === ".BYTE") ? parts.slice(1).join(" ") : parts.slice(1).join("")
+    const isDataDir = (instr === "HEX" || instr === "!BYTE" || instr === ".BYTE" || instr === "!WORD" || instr === ".WORD" || instr === "DW" || instr === "DA")
+    const operand = isDataDir ? parts.slice(1).join(" ") : parts.slice(1).join("")
     const b = getEncodedBytes(instr, operand, pc, labels)
     bytes.push(...b)
     pc += b.length
@@ -259,11 +334,19 @@ export const assemble6502 = (lines, startAddress = 0x2000, extraLabels = {}) => 
 
 // Load and assemble an assembly source file with a given VERA slot base
 export const assembleAsmFile = (srcDir, filename, slot = 2, startAddress = 0x2000, extraLines = []) => {
-  const filePath = path.join(srcDir, filename)
+  const filePath = path.isAbsolute(filename) ? filename : path.join(srcDir, filename)
+  const fileDir = path.dirname(filePath)
   const content = fs.readFileSync(filePath, "utf-8")
   const fileLines = content.split(/\r?\n/)
 
-  const veraIncPath = path.join(srcDir, "vera.inc")
+  let veraIncPath = path.join(fileDir, "vera.inc")
+  if (!fs.existsSync(veraIncPath)) {
+    veraIncPath = path.join(fileDir, "..", "vera.inc")
+  }
+  if (!fs.existsSync(veraIncPath)) {
+    veraIncPath = path.join(srcDir, "vera.inc")
+  }
+
   const veraIncLines = fs.existsSync(veraIncPath)
     ? fs.readFileSync(veraIncPath, "utf-8").split(/\r?\n/)
     : []

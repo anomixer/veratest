@@ -3,9 +3,12 @@
   "version": "1.0.0",
   "description": "VERA Graphics & 4-Voice PSG Sound Demo Disk for Apple II / Apple2TS",
   "type": "module",
-  "main": "build.mjs",
+  "main": "src/veratest/veratest.mjs",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node src/veratest/veratest.mjs",
+    "build:veratest": "node src/veratest/veratest.mjs",
+    "build:slideshow": "node src/slideshow/slideshow_hdv.mjs",
+    "build:all": "node src/veratest/veratest.mjs && node src/slideshow/slideshow_hdv.mjs"
   },
   "keywords": [
     "apple2",

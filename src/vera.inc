@@ -14,10 +14,12 @@ VERA_CTRL     = VERA_BASE + $05  ; Control (Bit 0=Port Select, Bit 7=Reset)
 VERA_IEN      = VERA_BASE + $06  ; Interrupt Enable
 VERA_ISR      = VERA_BASE + $07  ; Interrupt Status
 VERA_IRQ_L    = VERA_BASE + $08  ; Scanline IRQ Target [7:0]
-VERA_DC_VID   = VERA_BASE + $09  ; Display Composer Video Control
+VERA_DC_VID   = VERA_BASE + $09  ; Display Composer Video Control (Bit 3=L1, Bit 2=L0, Bit 0=Sprites)
 VERA_DC_HSC   = VERA_BASE + $0A  ; Display Composer H-Scale (128=1.0x, 64=2.0x)
 VERA_DC_VSC   = VERA_BASE + $0B  ; Display Composer V-Scale (128=1.0x, 64=2.0x)
 VERA_DC_BOR   = VERA_BASE + $0C  ; Border Color Index
+
+; Layer 0 Registers
 VERA_L0_CFG   = VERA_BASE + $0D  ; Layer 0 Config & Color Mode
 VERA_L0_MAP   = VERA_BASE + $0E  ; Layer 0 Tilemap Base Address
 VERA_L0_TIL   = VERA_BASE + $0F  ; Layer 0 Tile/Bitmap Base Address
@@ -25,6 +27,15 @@ VERA_L0_HSC_L = VERA_BASE + $10  ; Layer 0 H-Scroll Low
 VERA_L0_HSC_H = VERA_BASE + $11  ; Layer 0 H-Scroll High
 VERA_L0_VSC_L = VERA_BASE + $12  ; Layer 0 V-Scroll Low
 VERA_L0_VSC_H = VERA_BASE + $13  ; Layer 0 V-Scroll High
+
+; Layer 1 Registers
+VERA_L1_CFG   = VERA_BASE + $14  ; Layer 1 Config & Color Mode
+VERA_L1_MAP   = VERA_BASE + $15  ; Layer 1 Tilemap Base Address
+VERA_L1_TIL   = VERA_BASE + $16  ; Layer 1 Tile/Bitmap Base Address
+VERA_L1_HSC_L = VERA_BASE + $17  ; Layer 1 H-Scroll Low
+VERA_L1_HSC_H = VERA_BASE + $18  ; Layer 1 H-Scroll High
+VERA_L1_VSC_L = VERA_BASE + $19  ; Layer 1 V-Scroll Low
+VERA_L1_VSC_H = VERA_BASE + $1A  ; Layer 1 V-Scroll High
 
 ; Apple II Hardware Softswitches
 KBD_DATA      = $C000            ; Read Keyboard Data (Bit 7 = Key pressed)

@@ -3,7 +3,7 @@ import path from "path"
 
 // Applesoft BASIC Tokenizer & Compiler for src/*.bas
 export const compileApplesoftBasic = (srcDir, filename) => {
-  const filePath = path.join(srcDir, filename)
+  const filePath = path.isAbsolute(filename) ? filename : path.join(srcDir, filename)
   const source = fs.readFileSync(filePath, "utf-8")
   const lines = source.split(/\r?\n/)
 
@@ -146,6 +146,12 @@ export const compileApplesoftBasic = (srcDir, filename) => {
 
       if (inString) {
         tokenized.push(char.charCodeAt(0))
+        i++
+        continue
+      }
+
+      // Skip whitespace outside strings
+      if (char === " " || char === "\t") {
         i++
         continue
       }
