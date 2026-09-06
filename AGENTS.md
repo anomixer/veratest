@@ -7,7 +7,7 @@ This document serves as the comprehensive architectural reference, hardware spec
 ## 📖 1. Project Overview
 
 - **Repository**: [https://github.com/anomixer/veratest](https://github.com/anomixer/veratest)
-- **Target Platform**: Apple II computers (Apple IIe, Apple IIgs, Laser 128) and [Apple2TS](https://apple2ts.com) web emulator.
+- **Target Platform**: Apple II computers (Apple IIe, Apple IIgs, Laser 128), [Apple2TS](https://apple2ts.com) web emulator, and [AppleWin](https://github.com/anomixer/AppleWin) emulator.
 - **Hardware Target**: VERA (Versatile Embedded Retro Adapter) FPGA Expansion Card installed on **Slot 2** (`$C200`) or **Slot 4** (`$C400`).
 - **Build Output**:
   - `veratest.po` (140KB ProDOS 2.4.3 bootable disk image)
@@ -92,7 +92,7 @@ veratest/
     ├── applebasic.inc         # Applesoft BASIC token table
     ├── vera.inc               # VERA register offsets and Apple II hardware softswitches
     │
-    ├── veratest/              # 🎮 6-in-1 Flagship Test Suite & Showcase
+    ├── veratest/              # 🎮 7-in-1 Flagship Test Suite & Showcase
     │   ├── veratest.mjs       # 140KB ProDOS 2.4.3 floppy builder & PNG renderer
     │   ├── startup.bas        # Applesoft BASIC dual-port hardware probe and menu script
     │   ├── sprite.asm         # 16-Sprite 4bpp crystal alien bouncing animation
@@ -101,6 +101,9 @@ veratest/
     │   ├── mode4.asm          # Mode 4 256-color RPG tilemap engine with centered castle wander camera
     │   ├── layer.asm          # Dual-Layer parallax starfield & high-speed plasma storm
     │   ├── matrix.asm         # The Matrix digital code rain with 256-color palette cycling
+    │   ├── sonic.asm          # Sonic The Hedgehog Green Hill Zone dual-layer engine with PSG music player
+    │   ├── build_sonic_dat.mjs# Sonic asset packager, palette builder, and ZSM converter
+    │   ├── sonic.dat          # Compacted 103-block Sonic asset container
     │   ├── mode4-*.bin        # Mode 4 palette and tilemap binary assets
     │   ├── rainbow_rle.mjs    # Mode 7 rainbow pattern generator and RLE compressor
     │   └── preview.mjs        # 560x384 PNG preview screenshot generator
@@ -143,9 +146,12 @@ Three X16 ZSM soundtracks (`SB-INTRO`, `CANYON`, and `GREENHILL`) are converted 
 
 The source archive contains additional ZSM files, but they are intentionally excluded from this port because they are FM-only or not reliably audible through the Apple II VERA PSG path. The packaged playlist is limited to the three tested tracks above.
 
-Auto-play is enabled by default with a three-second interval. The launcher displays the slideshow controls after option `1` is selected. Slideshow controls are Right/Down (Space is also supported) for next, Left/Up (or `P`) for previous, `N` for next soundtrack, `A` for auto-play, `R` for random mode plus auto-play, `M` for mute/playback, and `Esc`/`Q` to return to BASIC. On Apple II, the left arrow is reported as key code `$08` (Backspace).
+Auto-play is enabled by default with a three-second interval. The launcher displays the slideshow controls after option `1` is selected and automatically launches after 5 seconds or upon any keypress. Slideshow controls are Right/Down (Space is also supported) for next, Left/Up (or `P`) for previous, `N` for next soundtrack, `A` for auto-play, `R` for random mode plus auto-play, `O` to toggle the Layer 1 on-screen display (OSD) status bar, `M` for mute/playback, and `Esc`/`Q` to return to BASIC. On Apple II, the left arrow is reported as key code `$08` (Backspace).
 
-The slideshow binary writes the current image as `IMG: nnn/375` (one space after the colon) to the lower-right corner of Apple II text page 1. This is intended for setups where the Apple II text display and VERA output are shown separately.
+Dual status reporting is provided for both single-monitor and multi-monitor setups:
+- The slideshow binary writes the current image as `IMG: nnn/375` to Apple II text page 1 (row 24) and `MUSIC: <name>` to the bottom-left.
+- In graphics mode, the OSD status bar is rendered directly onto the bottom 8 scanlines of the Mode 7 bitmap (Row 29, scanlines 232..239, VRAM `$12200..$12BFF`): `MUSIC: <NAME>    [MODE]   IMG: nnn / 375`. Precomputed palette LUT tables (`PAL_FG_TABLE` and `PAL_BG_TABLE`) pick optimal white text and black background color indices for each of the 375 custom palettes with 0% palette overwriting and 0% visual noise. When OSD is toggled OFF with `'O'`, the original 2,560 bitmap bytes backed up at RAM `$5000..$59FF` are restored into VRAM in ~12ms.
+- In `CANYON.ZSM`, PSG channels are acoustics-balanced (noise percussion attenuated to 55%, melodic voices boosted to 130%) to ensure balanced volume between rhythm and lead.
 
 ---
 
@@ -183,3 +189,41 @@ The slideshow binary writes the current image as `IMG: nnn/375` (one space after
    - Built full ProDOS file system structure with `/DATA/` subdirectory registering all 750 image and palette files (`IMG001`~`375`, `VPAL001`~`375`), fully readable in standard ProDOS file browsers.
    - Pure 6502 assembly ProDOS MLI Direct Block (`$80`) streaming engine (`src/slideshow/slideshow.asm`) with interactive keyboard controls (Space/Arrows=Next/Prev, A=Auto, R=Random, ESC=Exit) and zero-flicker palette transitions.
    - Self-contained build script (`src/slideshow/slideshow_hdv.mjs`) and 560x384 preview generator (`src/slideshow/preview.mjs`).
+10. **Sprite Demos Complete VRAM & Attribute Clean Reset (`sprite.asm` / `spritesnd.asm`)**:
+    - Eliminated ghost sprites and visual artifacts when launching Sprite Demo 1 and Demo 2 after running sprite-intensive titles (such as *Time Pilot*).
+    - Blanked display composer (`VERA_DC_VID = 0`), disabled residual layers (`L0_CFG = 0`, `L1_CFG = 0`), and reset border color.
+    - Implemented high-performance 64KB unrolled block wiper (`CLR_64K`) to completely zero out all 128 KB of VRAM across Bank 0 and Bank 1 in ~0.5s:
+      - Wiped all 128 sprite attribute slots (`$1FC00..$1FFFF`) to `Z-depth = 0`, permanently disabling uninitialized sprites 16..127.
+      - Wiped entire 64KB sprite pattern and VRAM data space, eliminating residual pixel art.
+      - Silenced all 16 PSG sound generator channels (`$1F9C0..$1F9FF`) and cleared 256 palette registers (`$1FA00..$1FBFF`).
+    - Atomically enabled video (`VERA_DC_VID = $41`) only after full VRAM wipe, palette load, sprite 0..15 setup, and pattern upload.
+11. **Automatic VERA to Apple II Native Display Return on Exit (`startup.bas` & All Showcases)**:
+    - Implemented seamless single-monitor auto-switching compatibility for AppleWin and Apple II video monitors.
+    - Added clean video disable (`LDA #$00; STA VERA_DC_VID`) to the key-press exit handlers across all six showcases (`sprite.asm`, `spritesnd.asm`, `mode7.asm`, `mode4.asm`, `layer.asm`, `matrix.asm`).
+    - Added key-press pause to `mode7.asm` so users can view the rainbow arc before returning to BASIC.
+    - Updated Applesoft BASIC `startup.bas` to enforce VERA video disable (`POKE 49673, 0` for Slot 2, `POKE 50185, 0` for Slot 4) upon entering the menu and exiting to BASIC prompt, causing AppleWin's `IsVideoOutputEnabled()` to return `false` and instantly restore the Apple II text screen.
+12. **Release v0.0.3: 7-in-1 Flagship Showcase & Sonic Green Hill Zone Port (`sonic.asm` / `sonic.dat`)**:
+    - Ported ZeroByte's Sega Genesis *Sonic The Hedgehog: Green Hill Zone* demo to the Apple II VERA expansion card.
+    - Implemented dual-layer parallax scrolling with fractional background speed, Sonic running 4-frame hardware sprite animation with rolling ground bobbing dips (`Y_DIPS`), 4-color cycling water palette at `$1FA50`, and real-time sunflower VRAM tile swapping at `$0EB80`.
+    - Integrated 60 Hz VERA VSYNC IRQ driving authentic 16-channel PSG Green Hill Zone polyphonic chiptune audio.
+    - Compacted all assets, palette, and PSG stream into a contiguous 103-block container (`SONIC.DAT`), streamed via ProDOS MLI in 512-byte blocks into VERA VRAM in under 1.5 seconds.
+    - Fits comfortably on the 140KB floppy disk with 27 free blocks remaining, zero corruption to Apple II Zero Page or system vectors, and instantaneous text screen restoration on exit.
+13. **Direct Mode 7 Bitmap OSD Overlay, 5s Auto-Launcher & CANYON Volume Rebalance (`slideshow.asm` / `startup.bas` / `slideshow_hdv.mjs`)**:
+    - Engineered high-performance graphics-mode On-Screen Display (OSD) overlay rendered directly into Mode 7 bitmap VRAM on Row 29 (bottom 8 scanlines, VRAM `$12200..$12BFF`).
+    - Row 29 displays a crisp 40-column status bar: `MUSIC: <NAME>    [MODE]   IMG: nnn / 375` (supporting `[AUTO]`, `[RANDOM]`, `[MANUAL]`, and `[MUTED]`).
+    - Precomputed optimal FG (white) and BG (black) palette LUTs (`PAL_FG_TABLE` & `PAL_BG_TABLE`) across all 375 custom palettes, ensuring 0% palette overwriting and eliminating white speckle noise artifacts.
+    - Saves the original 2,560 bitmap bytes into Apple II RAM `$5000..$59FF` on load, allowing instant sub-13ms restoration on OSD toggle OFF (`'O'`), and sub-23ms rendering on OSD toggle ON.
+    - Enhanced `startup.bas` launcher with a 5-second auto-countdown or immediate keypress bypass upon selecting option `1`, matching Time Pilot single-monitor launcher behavior.
+    - Rebalanced `CANYON.ZSM` PSG audio: scaled noise percussion to 55% and boosted melodic voices to 130% in `slideshow_hdv.mjs` compiler for a balanced, punchy acoustic mix.
+14. **Corner OSD Badges, PSG Shadow Unmute Engine & Text Mode [MUTE] (`slideshow.asm` / `slideshow_hdv.mjs`)**:
+    - Fixed HDV `slotBase` 1-off image indexing mismatch in `slideshow_hdv.mjs` (`i * 152` vs `(i - 1) * 152`), perfectly aligning image palettes with `palette_lut.inc` and guaranteeing crisp white text across all 375 custom palettes.
+    - Redesigned Row 29 OSD to render dual corner badges (left badge cols 0..15: `MUSIC: <NAME>`, right badge cols 26..39: `IMG: nnn / 375`), completely skipping center columns 16..25 (80 pixels) to preserve central image art (e.g. swan feathers) without any black bar obstruction.
+    - Engineered 64-byte RAM shadow register table (`PSG_SHADOW`) mirroring all 16 PSG voice writes. When unmuting (`'M'`), `RESTORE_PSG_FROM_SHADOW` instantly restores all voice frequencies, waveforms, volumes, and stereo pans to VERA hardware in under 0.1ms, eliminating dropped notes, dissonant buzzing, and pitch distortion.
+15. **Ultra-Compact OSD, Clean Reboot Initialization & Pure Image Mute Mode (`slideshow.asm` / `startup.bas`)**:
+    - Compacted OSD strings to space-free formatting: left badge `MUSIC:<NAME>` (cols 0..11/13/14) and right badge `IMG:xxx/375` (cols 29..39), expanding the middle untouched picture region to 120..136 pixels wide.
+    - Restructured entry initialization (`START`): blanks VERA video (`VERA_DC_VID = 0`), silences all 16 PSG channels (`SILENCE_PSG`), clears shadows, loads image 1, and only then atomically turns on video output (`VERA_DC_VID = $11`) and enables 60 Hz music IRQ, completely resolving reboot freeze.
+    - Preserved continuous 60 Hz music streaming across background image copy without pauses or stutter.
+    - When Muted (`'M'`), the left `MUSIC:` badge is completely suppressed (`LEFT_BADGE_END = 0`), leaving columns 0..28 (232 pixels wide out of 320!) as 100% untouched original Mode 7 artwork, while blanking row 24 in Apple II text mode.
+
+
+

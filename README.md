@@ -1,27 +1,36 @@
 # VERA Test Demo Disk & Slideshow for Apple II
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/anomixer/veratest)
+[![Release](https://img.shields.io/github/v/release/anomixer/veratest?color=purple)](https://github.com/anomixer/veratest/releases)
 [![Apple2TS Compatible](https://img.shields.io/badge/Apple2TS-compatible-blue.svg)](https://apple2ts.com)
+[![AppleWin Compatible](https://img.shields.io/badge/AppleWin-compatible-orange.svg)](https://github.com/anomixer/AppleWin)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Interactive 6-in-1 test suite and 375-image fullscreen 256-color slideshow for the **VERA (Versatile Embedded Retro Adapter)** FPGA expansion card on **Apple II** computers and the [Apple2TS](https://apple2ts.com) web emulator.
+Interactive 7-in-1 test suite and 375-image fullscreen 256-color slideshow for the **VERA (Versatile Embedded Retro Adapter)** FPGA expansion card on **Apple II** computers (compatible with both [Apple2TS](https://apple2ts.com) web emulator and [AppleWin](https://github.com/anomixer/AppleWin) emulator with VERA card).
 
-| 🎮 6-in-1 Flagship Test Suite (`veratest.po`) | 🖼️ 32MB 375-Image Slideshow (`slideshow.hdv`) |
+| 🎮 7-in-1 Flagship Test Suite (`veratest.po`) | 🖼️ 32MB 375-Image Slideshow (`slideshow.hdv`) |
 | :---: | :---: |
 | ![VERA Test Demo](veratest.png) | ![VERA Slideshow Demo](slideshow.png) |
 
 ---
 
-## 🚀 Live Demo on Apple2TS
+## 🚀 Emulators & Hardware Compatibility
 
+### 🌐 Apple2TS Web Emulator
 You can run this demo disk directly in your browser without any installation:
 👉 **[Launch VERA Test on Apple2TS](https://apple2ts.com)**
 
 *(In Apple2TS, ensure the VERA Card is installed in Slot 2 or Slot 4, and open the "VERA Monitor" tab to watch the 640x480 VGA output!)*
 
+### 💻 AppleWin Emulator & Real Apple II Hardware
+Fully compatible with [AppleWin](https://github.com/anomixer/AppleWin) (with VERA card emulation) and physical Apple II computers (Apple IIe, Apple IIgs, Laser 128) with a VERA FPGA card in **Slot 2** (`$C200`) or **Slot 4** (`$C400`):
+- **Seamless Single-Monitor Auto-Switching**: Automatically disables VERA video output (`VERA_DC_VID = 0`) on menu entry and upon pressing `ESC`/`Q` in any showcase, allowing AppleWin to cleanly restore the native Apple II text screen with zero display corruption.
+- **Dual-Port Hardware Signature Probing**: Automatically detects whether the VERA card is in Slot 2 or Slot 4 and dynamically launches the corresponding 6502 binary (`SLIDESHOW.BIN` / `SLIDSHW4.BIN`, `SONIC.BIN` / `SONIC4.BIN`, etc.).
+- **Clean Boot & Cold-Reset Safety**: Blanks display composer and zeroes out all 16 PSG sound channels on entry, completely eliminating ghost sprites, audio buzzing, and reboot freeze.
+
 ---
 
-## 🎮 6-in-1 Flagship Showcases
+## 🎮 7-in-1 Flagship Showcases
 
 | # | Showcase Name | Tech Highlights & Features |
 |---|---|---|
@@ -31,6 +40,7 @@ You can run this demo disk directly in your browser without any installation:
 | **4** | **Mode 4 256-Color RPG Tilemap** | Authentic Mode 4 tilemap engine featuring 8bpp $8 \times 8$ tiles, centered castle landscape, and smooth horizontal scrolling wander camera. |
 | **5** | **Dual-Layer Parallax Energy Waves** | VERA dual-layer hardware capability demonstration: Layer 0 background starfield + Layer 1 high-speed plasma wave array scrolling leftward with 3D parallax depth. |
 | **6** | **The Matrix Digital Code Rain** | 256-color text mode (`T256C=1`) palette-cycling engine with multi-track, multi-speed green waterfalls and live Katakana glitch mutations. |
+| **7** | **Sonic The Hedgehog: Green Hill Zone** | Sega Genesis classic ported from Commander X16: dual-layer parallax scrolling, 4-frame animated hardware sprites with ground level bobbing, shimmering water palette cycling, rotating sunflower VRAM swapping, and 60 Hz VERA PSG Green Hill Zone polyphonic chiptune BGM. |
 
 ---
 
@@ -58,7 +68,7 @@ build.bat all
   - `applebasic.mjs`: Standalone Applesoft BASIC tokenizer and memory-linked binary compiler.
   - `applebasic.inc`: Applesoft BASIC keyword token definitions.
   - `vera.inc`: VERA register offsets and Apple II hardware softswitch constants.
-- `src/veratest/`: Flagship 6-in-1 test suite & demo showcases:
+- `src/veratest/`: Flagship 7-in-1 test suite & demo showcases:
   - `veratest.mjs`: 140KB ProDOS 2.4.3 floppy builder & PNG renderer.
   - `startup.bas`: Applesoft BASIC dual-port hardware probe and launcher menu.
   - `sprite.asm`: 16-Sprite 4bpp bouncing alien animation.
@@ -67,6 +77,8 @@ build.bat all
   - `mode4.asm`: Mode 4 256-color RPG tilemap engine with wandering camera.
   - `layer.asm`: Dual-Layer parallax deep space starfield & high-speed plasma storm.
   - `matrix.asm`: The Matrix digital code rain stream simulator with 256-color palette cycling.
+  - `sonic.asm`: Sonic The Hedgehog Green Hill Zone dual-layer engine with PSG music player.
+  - `build_sonic_dat.mjs` & `sonic.dat`: Sonic asset packager, palette builder, and ZSM converter.
   - `rainbow_rle.mjs` & `preview.mjs`: RLE compressor and preview screenshot generator.
 - `src/slideshow/`: 32MB 375-Image Mode 7 ($320 \times 240$ 8bpp) Fullscreen Slideshow engine:
   - `slideshow.asm`: Pure 6502 ProDOS MLI Direct Block ($80) streaming engine.
@@ -91,9 +103,19 @@ Three original X16 ZSM soundtracks (`SB-INTRO`, `CANYON`, and `GREENHILL`) are b
 
 The source archive also contains other ZSM files, but they are not packaged because they are FM-only or not reliably audible through the Apple II VERA PSG path. The Apple II playlist intentionally keeps the three tested PSG tracks above.
 
-Auto-play is enabled by default and advances every 3 seconds. During playback, use Right/Down (Space is also supported) for the next image, Left/Up (or `P`) for the previous image, `N` for the next soundtrack, `A` to toggle auto-play, `R` to toggle random mode and auto-play together, and `Esc` or `Q` to return to BASIC. On Apple II, the left arrow is reported as key code `$08` (Backspace). The launcher prints the slideshow controls after option `1` is selected.
+Auto-play is enabled by default and advances every 3 seconds. During playback, use Right/Down (Space is also supported) for the next image, Left/Up (or `P`) for the previous image, `N` for the next soundtrack, `A` to toggle auto-play, `R` to toggle random mode and auto-play together, `O` to toggle the on-screen display (OSD) status bar overlay, and `Esc` or `Q` to return to BASIC. On Apple II, the left arrow is reported as key code `$08` (Backspace). The launcher prints the slideshow controls after option `1` is selected and automatically continues after 5 seconds or upon any keypress.
 
-The independent Apple II text display shows the current image number in its lower-right corner as `IMG: nnn/375` (one space after the colon).
+The slideshow engine provides dual status reporting:
+- **On-Screen Display (OSD Overlay)**: Pure Mode 7 bitmap overlay (`O` key to toggle) rendered on scanlines 232..239 (Row 29) using precomputed palette LUTs (`PAL_FG_TABLE` & `PAL_BG_TABLE`) ensuring 0% palette overwriting:
+  - **Dual Ultra-Compact Corner Badges**:
+    - Left corner: `MUSIC:<NAME>` (columns 0..11, 0..13, or 0..14)
+    - Right corner: `IMG:xxx/375` (columns 29..39)
+    - **Untouched Center Artwork**: Columns 12/14/15 through 28 (120 to 136 pixels wide!) are completely skipped by VERA hardware address jumps, preserving the original bitmap artwork without any black box.
+  - **Pure Image Mute Mode (`M` key)**: Suppresses the left music badge entirely, leaving columns 0 through 28 (**232 pixels wide out of 320!**) as 100% untouched Mode 7 art.
+  - **PSG Shadow Unmute Engine**: Uses a 64-byte RAM shadow register table (`PSG_SHADOW`) to instantaneously restore all 16 voices with zero pitch glitching or lost notes upon unmuting.
+- **Apple II Native Text Screen**: Displays `MUSIC:<name>` at the lower-left (`$07D0`) and `IMG:xxx/375` at the lower-right (`$07ED..$07F7`), blanking the left side when muted.
+
+Soundtrack balance is tuned specifically for the VERA PSG. In particular, `CANYON` has its PSG melodic channels boosted and noise percussion dynamically attenuated so that the rhythm and lead stay in perfect acoustic balance.
 
 ### X16 VERA vs. Apple II VERA Audio
 
@@ -134,6 +156,7 @@ Special thanks to the original creators, engineers, and contributors whose work 
 - **[Michael Steil](https://github.com/mist64)** – Commander X16 emulator architecture and core implementation.
 - **[David Murray (The 8-Bit Guy)](https://www.the8bitguy.com/)** – Creator and visionary of the Commander X16 project.
 - **[Anthony Henry (ahenry3068)](https://github.com/ahenry3068)** – Creator of the original Commander X16 75-Image Fullscreen 256-Color Slideshow and Bitmap Assets.
+- **[ZeroByte (ZeroByteOrg)](https://github.com/ZeroByteOrg/sonicdemo)** – Creator of the original *Sonic The Hedgehog: Green Hill Zone* dual-layer parallax engine and demo for Commander X16.
 - **[Mike Morrison](https://github.com/code-bythepound)** – Porting the VERA core to TypeScript and adapting it for Apple II / web emulation.
 - **[Chris Torrence (ct6502)](https://github.com/ct6502)** – Creator of the [Apple2TS](https://apple2ts.com) web emulator ecosystem.
 - **[Original X16 Demo Authors](https://github.com/X16Community/x16-demo)**:

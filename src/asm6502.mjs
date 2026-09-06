@@ -17,6 +17,10 @@ export const assemble6502 = (lines, startAddress = 0x2000, extraLabels = {}) => 
         const p = s.split("+")
         s = p[0].trim()
         add = parseInt(p[1].trim().replace("$", "0x"))
+      } else if (s.includes("-")) {
+        const p = s.split("-")
+        s = p[0].trim()
+        add = -parseInt(p[1].trim().replace("$", "0x"))
       }
       let val = 0
       if (s in currentLabels) {
@@ -55,6 +59,14 @@ export const assemble6502 = (lines, startAddress = 0x2000, extraLabels = {}) => 
         if (h.startsWith("0x") || h.startsWith("0X")) return parseInt(h, 16)
         return parseInt(h, 10)
       })
+    }
+
+    if (instr === "ASC") {
+      let str = operand.trim()
+      if ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'"))) {
+        str = str.slice(1, -1)
+      }
+      return Array.from(str).map(c => c.charCodeAt(0))
     }
 
     // Inherent / Implied 1-byte opcodes
@@ -284,6 +296,10 @@ export const assemble6502 = (lines, startAddress = 0x2000, extraLabels = {}) => 
         const p = expr.split("+")
         expr = p[0].trim()
         add = parseInt(p[1].trim().replace("$", "0x"))
+      } else if (expr.includes("-")) {
+        const p = expr.split("-")
+        expr = p[0].trim()
+        add = -parseInt(p[1].trim().replace("$", "0x"))
       }
       let val = 0
       if (expr in labels) {
@@ -297,14 +313,19 @@ export const assemble6502 = (lines, startAddress = 0x2000, extraLabels = {}) => 
       continue
     }
 
-    if (line.endsWith(":")) {
-      labels[line.slice(0, -1).trim()] = pc
-      continue
+    if (line.includes(":") && !line.startsWith(";")) {
+      const colonIdx = line.indexOf(":")
+      const labelPart = line.slice(0, colonIdx).trim()
+      if (/^[A-Za-z0-9_]+$/.test(labelPart)) {
+        labels[labelPart] = pc
+        line = line.slice(colonIdx + 1).trim()
+        if (!line) continue
+      }
     }
 
     const parts = line.split(/\s+/)
     const instr = parts[0].toUpperCase()
-    const isDataDir = (instr === "HEX" || instr === "!BYTE" || instr === ".BYTE" || instr === "!WORD" || instr === ".WORD" || instr === "DW" || instr === "DA")
+    const isDataDir = (instr === "HEX" || instr === "!BYTE" || instr === ".BYTE" || instr === "!WORD" || instr === ".WORD" || instr === "DW" || instr === "DA" || instr === "ASC")
     const operand = isDataDir ? parts.slice(1).join(" ") : parts.slice(1).join("")
     const b = getEncodedBytes(instr, operand, pc, labels)
     pc += b.length
@@ -318,11 +339,19 @@ export const assemble6502 = (lines, startAddress = 0x2000, extraLabels = {}) => 
     if (!line) continue
     if (line.startsWith("ORG") || line.startsWith("* =") || line.startsWith("*=")) continue
     if (line.includes(" EQU ") || line.includes(" = ") || /^\w+\s*=/.test(line)) continue
-    if (line.endsWith(":")) continue
+
+    if (line.includes(":") && !line.startsWith(";")) {
+      const colonIdx = line.indexOf(":")
+      const labelPart = line.slice(0, colonIdx).trim()
+      if (/^[A-Za-z0-9_]+$/.test(labelPart)) {
+        line = line.slice(colonIdx + 1).trim()
+        if (!line) continue
+      }
+    }
 
     const parts = line.split(/\s+/)
     const instr = parts[0].toUpperCase()
-    const isDataDir = (instr === "HEX" || instr === "!BYTE" || instr === ".BYTE" || instr === "!WORD" || instr === ".WORD" || instr === "DW" || instr === "DA")
+    const isDataDir = (instr === "HEX" || instr === "!BYTE" || instr === ".BYTE" || instr === "!WORD" || instr === ".WORD" || instr === "DW" || instr === "DA" || instr === "ASC")
     const operand = isDataDir ? parts.slice(1).join(" ") : parts.slice(1).join("")
     const b = getEncodedBytes(instr, operand, pc, labels)
     bytes.push(...b)
@@ -338,6 +367,25 @@ export const assembleAsmFile = (srcDir, filename, slot = 2, startAddress = 0x200
   const fileDir = path.dirname(filePath)
   const content = fs.readFileSync(filePath, "utf-8")
   const fileLines = content.split(/\r?\n/)
+  const resolveIncludes = (lines, baseDir) => {
+    const result = []
+    for (const rawLine of lines) {
+      const trimmed = rawLine.trim()
+      if (/^\.?include\s+["'<](.+)["'>]/i.test(trimmed)) {
+        const match = trimmed.match(/^\.?include\s+["'<](.+)["'>]/i)
+        const incPath = path.isAbsolute(match[1]) ? match[1] : path.resolve(baseDir, match[1])
+        if (fs.existsSync(incPath)) {
+          const incLines = fs.readFileSync(incPath, "utf-8").split(/\r?\n/)
+          result.push(...resolveIncludes(incLines, path.dirname(incPath)))
+          continue
+        }
+      }
+      result.push(rawLine)
+    }
+    return result
+  }
+
+  const resolvedFileLines = resolveIncludes(fileLines, fileDir)
 
   let veraIncPath = path.join(fileDir, "vera.inc")
   if (!fs.existsSync(veraIncPath)) {
@@ -355,7 +403,7 @@ export const assembleAsmFile = (srcDir, filename, slot = 2, startAddress = 0x200
   const combinedLines = [
     `VERA_BASE = $${hex(baseAddress)}`,
     ...veraIncLines,
-    ...fileLines,
+    ...resolvedFileLines,
     ...extraLines
   ]
 

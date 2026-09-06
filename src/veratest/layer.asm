@@ -217,6 +217,8 @@ NO_FRAME_CHG:
     LDA $C000
     BPL NO_KEY
     STA $C010
+    LDA #$00
+    STA VERA_DC_VID     ; Disable VERA display (switches AppleWin back to Apple II text mode)
     LDA #$FF
     STA $F1
     RTS

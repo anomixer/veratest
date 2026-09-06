@@ -79,7 +79,14 @@ EMIT_PIXELS:
     JMP DECOMPRESS_LOOP
 
 DONE_DRAWING:
-    RTS                 ; Finished drawing instantly! Return straight to BASIC menu
+    ; Wait for keypress before returning to BASIC menu
+WAIT_KEY:
+    LDA $C000
+    BPL WAIT_KEY
+    STA $C010
+    LDA #$00
+    STA VERA_DC_VID     ; Disable VERA display (switches AppleWin back to Apple II text mode)
+    RTS
 
 ; Palette: 0:Black, 1:SkyBlue, 2:Red, 3:Orange, 4:Yellow, 5:Green, 6:Blue, 7:Indigo, 8:Violet, 9:Grass
 ; Little-Endian 12-bit RGB: Byte 0: [G4 B4], Byte 1: [0 R4]

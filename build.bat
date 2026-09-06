@@ -24,7 +24,7 @@ goto do_help
 
 :do_veratest
 echo ==============================================================================
-echo  Building VERA Test 6-in-1 Showcase Disk: veratest.po ...
+echo  Building VERA Test 7-in-1 Showcase Disk: veratest.po ...
 echo ==============================================================================
 node src\veratest\veratest.mjs
 if %ERRORLEVEL% NEQ 0 (

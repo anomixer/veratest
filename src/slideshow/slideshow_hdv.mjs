@@ -29,7 +29,23 @@ const compileZsmStream = (name) => {
     const command = raw[ptr++]
 
     if (command < 0x40) {
-      const value = raw[ptr++]
+      let value = raw[ptr++]
+
+      // Volume register balancing for CANYON:
+      // Voice 8 (Noise percussion) was overpoweringly loud compared to the melodic voices.
+      // Adjust balance so the percussion sits nicely in the mix without drowning out the melody.
+      if (name === "CANYON" && (command % 4 === 2)) {
+        const voice = Math.floor(command / 4)
+        const pan = value & 0xC0
+        let vol = value & 0x3F
+        if (voice === 8) {
+          vol = Math.round(vol * 0.55) // Attenuate loud noise percussion
+        } else {
+          vol = Math.min(63, Math.round(vol * 1.30)) // Boost melodic voices
+        }
+        value = pan | vol
+      }
+
       // Keep two-byte PSG writes inside one 512-byte disk block so the
       // 6502 streaming player never has to handle a split record.
       if ((stream.length & 0x1FF) === 0x1FF) stream.push(0)
@@ -80,6 +96,41 @@ const musicStreams = MUSIC_NAMES.map(name => {
 })
 
 console.log("🚀 Building 32MB ProDOS 2.4.3 Slideshow Hard Disk Image (Ultra-Reliable Direct Block Architecture)...")
+
+// 0. Precompute optimal FG (white) and BG (black) color indices for all 375 palettes
+const generatePaletteLut = () => {
+  const fgLut = []
+  const bgLut = []
+  for (let i = 1; i <= 375; i++) {
+    const num = String(i).padStart(3, "0")
+    const palData = fs.readFileSync(path.join(x16SlideshowDataDir, `VPAL${num}.BIN`))
+    let maxL = -1, maxIdx = 0, minL = 999999, minIdx = 0
+    for (let c = 0; c < 256; c++) {
+      const gb = palData[c * 2]
+      const r = palData[c * 2 + 1] & 0x0F
+      const g = (gb >> 4) & 0x0F
+      const b = gb & 0x0F
+      const lum = r * 30 + g * 59 + b * 11
+      if (lum > maxL) { maxL = lum; maxIdx = c; }
+      if (lum < minL) { minL = lum; minIdx = c; }
+    }
+    fgLut.push(maxIdx)
+    bgLut.push(minIdx)
+  }
+  let out = "; Precomputed Optimal FG and BG Color Indices for 375 Palettes\n"
+  out += "PAL_FG_TABLE:\n"
+  for (let i = 0; i < 375; i += 16) {
+    const chunk = fgLut.slice(i, Math.min(i + 16, 375)).map(v => v.toString(16).padStart(2, "0")).join(" ")
+    out += "    HEX " + chunk + "\n"
+  }
+  out += "PAL_BG_TABLE:\n"
+  for (let i = 0; i < 375; i += 16) {
+    const chunk = bgLut.slice(i, Math.min(i + 16, 375)).map(v => v.toString(16).padStart(2, "0")).join(" ")
+    out += "    HEX " + chunk + "\n"
+  }
+  fs.writeFileSync(path.join(slideshowDir, "palette_lut.inc"), out)
+}
+generatePaletteLut()
 
 // 1. Compile 6502 Assembly Slideshow Engine for Slot 2 & Slot 4
 console.log("  ⚙️ Compiling SLIDESHOW.BIN (Slot 2 & Slot 4)...")
@@ -294,7 +345,7 @@ for (let i = 0; i < imageNumbers.length; i++) {
   //   Block 0       : Palette Data (512B) -> VPALxxx.BIN KeyBlock
   //   Block 1       : Image Index Block (512B) -> IMGxxx.BIN KeyBlock
   //   Blocks 2..151 : Image Bitmap Data (76,800B)
-  const slotBase = START_IMAGE_BLOCK + (i - 1) * 152
+  const slotBase = START_IMAGE_BLOCK + i * 152
   const palBlock = slotBase
   const imgIndexBlock = slotBase + 1
   const imgDataStartBlock = slotBase + 2

@@ -166,6 +166,8 @@ UPD_HW:
     LDA $C000
     BPL NO_KEY
     STA $C010
+    LDA #$00
+    STA VERA_DC_VID     ; Disable VERA display (switches AppleWin back to Apple II text mode)
     RTS
 
 NO_KEY:

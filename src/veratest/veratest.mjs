@@ -170,6 +170,9 @@ const buildProDosDisk = () => {
   const layer4    = assembleAsmFile(veratestDir, "layer.asm", 4, 0x2000)
   const matrix2   = assembleAsmFile(veratestDir, "matrix.asm", 2, 0x2000)
   const matrix4   = assembleAsmFile(veratestDir, "matrix.asm", 4, 0x2000)
+  const sonic2    = assembleAsmFile(veratestDir, "sonic.asm", 2, 0x2000)
+  const sonic4    = assembleAsmFile(veratestDir, "sonic.asm", 4, 0x2000)
+  const sonicDat  = fs.readFileSync(path.join(veratestDir, "sonic.dat"))
 
   // 2. Compile Applesoft BASIC Startup Menu
   const startup = compileApplesoftBasic(veratestDir, "startup.bas")
@@ -187,6 +190,9 @@ const buildProDosDisk = () => {
   addFile("LAYER4.BIN",   0x06, 0x2000, layer4)
   addFile("MATRIX.BIN",   0x06, 0x2000, matrix2)
   addFile("MATRIX4.BIN",  0x06, 0x2000, matrix4)
+  addFile("SONIC.BIN",    0x06, 0x2000, sonic2)
+  addFile("SONIC4.BIN",   0x06, 0x2000, sonic4)
+  addFile("SONIC.DAT",    0x00, 0x0000, sonicDat)
   addFile("STARTUP",      0xFC, 0x0801, startup)
 
   disk[2 * 512 + 0x25] = fileCount & 0xFF
@@ -204,6 +210,8 @@ const buildProDosDisk = () => {
   console.log(`  - TILEMAP.BIN / 4  Size=${mode42.length} bytes (Mode 4 256-Color RPG Tilemap)`)
   console.log(`  - LAYER.BIN / 4    Size=${layer2.length} bytes (Dual-Layer Electric Storm)`)
   console.log(`  - MATRIX.BIN / 4   Size=${matrix2.length} bytes (Matrix Digital Rain)`)
+  console.log(`  - SONIC.BIN / 4    Size=${sonic2.length} bytes (Sonic Green Hill Zone)`)
+  console.log(`  - SONIC.DAT        Size=${sonicDat.length} bytes (Sonic Data Assets & PSG Music)`)
   console.log(`  - STARTUP          Size=${startup.length} bytes (Applesoft BASIC Menu)`)
 
   // 4. Generate veratest.png preview screenshot

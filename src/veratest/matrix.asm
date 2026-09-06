@@ -258,6 +258,8 @@ NO_T1_SHIFT:
     LDA $C000
     BPL NO_KEY
     STA $C010
+    LDA #$00
+    STA VERA_DC_VID     ; Disable VERA display (switches AppleWin back to Apple II text mode)
     ; Restore Applesoft BASIC text SPEED register ($F1) to full speed (255)
     LDA #$FF
     STA $F1

@@ -36,22 +36,54 @@ OLD_IRQ_H = $18
 IRQ_VERA_ADDR_L = $19
 IRQ_VERA_ADDR_M = $1A
 IRQ_VERA_ADDR_H = $1B
+SAVE_PTR        = $1E       ; Pointer for saving Row 29 in RAM ($1E, $1F)
+OSD_FG_COLOR    = $23       ; Optimal white color for current palette
+OSD_BG_COLOR    = $24       ; Optimal black color for current palette
+OSD_FONT_BYTE   = $25
+OSD_ROW_IDX     = $26
+OSD_COL_IDX     = $27
+LEFT_BADGE_END  = $28       ; Dynamic end column for left badge (13..16)
 
 DATA_BUF    = $3800     ; 512-Byte ProDOS Block Buffer ($3800 ~ $39FF)
 
 START:
-    ; 1. Clear keyboard strobe to consume leftover ENTER from BASIC menu
-    STA KBD_STROBE
+    ; 1. Hardware IRQ Safety & Video Blanking
+    SEI
+    LDA #$00
+    STA VERA_IEN          ; Disable VERA interrupts immediately
+    LDA #$01
+    STA VERA_ISR          ; Clear any pending VSYNC IRQ
+    STA KBD_STROBE        ; Clear keyboard strobe
     LDA #$FF
-    STA $F1             ; Set Applesoft text speed to normal (255)
+    STA $F1               ; Applesoft text speed normal (255)
+
+    ; 2. Blank VERA Display Composer & Reset Layers
+    LDA #$00
+    STA VERA_CTRL         ; Port 0, ADDRSEL = 0
+    STA VERA_DC_VID       ; Blank video display during initialization
+    STA VERA_DC_BOR       ; Border color = 0
+    STA VERA_L0_CFG       ; Disable Layer 0
+    STA VERA_L1_CFG       ; Disable Layer 1
+    LDA #$40              ; 2.0x scale (320x240 view)
+    STA VERA_DC_HSC
+    STA VERA_DC_VSC
+
+    ; 3. Silence ALL 16 VERA PSG Sound Channels ($1F9C0..$1F9FF) & Clear Shadow
+    JSR SILENCE_PSG
+    JSR CLEAR_PSG_SHADOW
+
+    ; 4. Initialize State Variables
     LDA #$01
     STA CURRENT_IMG
     LDA #$00
     STA CURRENT_IMG_H
-    LDA #$01            ; Default to AutoPlay
+    LDA #$01              ; Default to AutoPlay
     STA AUTO_MODE
     LDA #$00
     STA RANDOM_MODE
+    LDA #$01              ; Default OSD Enabled
+    STA OSD_ENABLED
+    STA OSD_DIRTY
     LDA #$5A
     STA RAND_SEED
     LDA #$37
@@ -62,41 +94,47 @@ START:
     STA MLI_UNIT_NUM
     STA CANYON_UNIT_NUM
 
-    ; 2. Configure VERA Display: Mode 7 Bitmap (320x240 8bpp)
-    LDA #$00
-    STA VERA_CTRL
-    ; Enable VGA output (1) + Layer 0 (0x10) -> DC_VID = $11
-    LDA #$11
-    STA VERA_DC_VID
-    LDA #$40            ; 2.0x scale (320x240 view)
-    STA VERA_DC_HSC
-    STA VERA_DC_VSC
-    LDA #$00
-    STA VERA_DC_BOR
-
-    ; Configure Layer 0: Bitmap Mode (Color depth 8bpp = 3, Bitmap Mode = 1 << 2 = 4) -> $07
+    ; 5. Configure Layer 0: Bitmap Mode (Color depth 8bpp = 3, Bitmap Mode = 1 << 2 = 4) -> $07
     LDA #$07
     STA VERA_L0_CFG
     LDA #$00
     STA VERA_L0_MAP
     STA VERA_L0_TIL
+    LDA #$00
     STA VERA_L0_HSC_L
     STA VERA_L0_HSC_H
     STA VERA_L0_VSC_L
     STA VERA_L0_VSC_H
+    STA VERA_L1_CFG
 
-    ; 3. Load and initialize the converted Canyon PSG stream
+    ; 6. Load and initialize the converted Canyon PSG stream
     JSR INIT_CANYON_MUSIC
     JSR LOAD_CANYON_MUSIC
     JSR UPDATE_MUSIC_NAME
-    JSR ENABLE_MUSIC_IRQ
 
-    ; 4. Initial Load of Image 1
+    ; 7. Initial Load of Image 1 and Palette 1
+    ; (Interrupts remain disabled so MLI disk streaming is completely atomic!)
     JSR LOAD_IMAGE_AND_PALETTE
     JSR RESET_AUTO_TIMER
     STA KBD_STROBE
 
+    ; 8. NOW that Image 1 and Palette 1 are in VRAM: Enable Video Output (Layer 0 only)
+    LDA #$11
+    STA VERA_DC_VID
+
+    ; 9. Hook and Enable Music IRQ (interrupts enabled only NOW)
+    JSR ENABLE_MUSIC_IRQ
+
 MAIN_LOOP:
+    LDA OSD_DIRTY
+    BEQ CHK_KEY
+    LDA #$00
+    STA OSD_DIRTY
+    LDA OSD_ENABLED
+    BEQ CHK_KEY
+    JSR RENDER_OSD_TEXT
+
+CHK_KEY:
     ; Check Keyboard Strobe
     LDA KBD_DATA
     BMI PROCESS_KEY
@@ -125,6 +163,12 @@ PROCESS_KEY:
     BEQ TOGGLE_RAND_JMP
     CMP #$72
     BEQ TOGGLE_RAND_JMP
+
+    ; 'O' / 'o' ($4F / $6F) -> Toggle OSD Status Bar
+    CMP #$4F
+    BEQ TOGGLE_OSD_JMP
+    CMP #$6F
+    BEQ TOGGLE_OSD_JMP
 
     ; 'M' / 'm' -> Toggle music
     CMP #$4D
@@ -168,6 +212,8 @@ TOGGLE_AUTO_JMP:
     JMP TOGGLE_AUTO
 TOGGLE_RAND_JMP:
     JMP TOGGLE_RAND
+TOGGLE_OSD_JMP:
+    JMP TOGGLE_OSD
 TOGGLE_MUTE_JMP:
     JMP TOGGLE_MUTE
 MUSIC_PREV_JMP:
@@ -189,11 +235,28 @@ DO_EXIT:
     STA $F1             ; Full text speed
     RTS
 
+TOGGLE_OSD:
+    LDA OSD_ENABLED
+    EOR #$01
+    STA OSD_ENABLED
+    BNE TOGGLE_OSD_ON
+
+TOGGLE_OSD_OFF:
+    JSR RESTORE_ROW29
+    JMP MAIN_LOOP
+
+TOGGLE_OSD_ON:
+    JSR RENDER_OSD_TEXT
+    JMP MAIN_LOOP
+
 TOGGLE_MUTE:
     LDA MUSIC_MUTE
     EOR #$01
     STA MUSIC_MUTE
+    JSR UPDATE_MUSIC_NAME
+    LDA MUSIC_MUTE
     BNE MUTE_PSG
+    JSR RESTORE_PSG_FROM_SHADOW
     JMP MAIN_LOOP
 MUTE_PSG:
     JSR SILENCE_PSG
@@ -203,6 +266,8 @@ TOGGLE_AUTO:
     LDA AUTO_MODE
     EOR #$01
     STA AUTO_MODE
+    LDA #$01
+    STA OSD_DIRTY
     JSR RESET_AUTO_TIMER
     JMP MAIN_LOOP
 
@@ -213,6 +278,7 @@ TOGGLE_RAND:
     ; Random mode always runs as an automatic slideshow.
     LDA #$01
     STA AUTO_MODE
+    STA OSD_DIRTY
     ; Immediately jump to random next image!
     JSR GET_RANDOM_375
     STA CURRENT_IMG
@@ -430,12 +496,31 @@ LOAD_IMAGE_AND_PALETTE:
     LDA CURR_BLK_H
     STA MLI_BLK_NUM+1
 
+    SEI
     JSR READ_BLOCK_MLI
+    CLI
     BCC PAL_READ_OK
     JMP READ_PAL_FAIL
 PAL_READ_OK:
+    ; Lookup optimal FG (white) and BG (black) for this image from precomputed LUT
+    LDA CURRENT_IMG_H
+    BEQ GET_LUT_LO
+    LDX CURRENT_IMG
+    LDA PAL_FG_TABLE+255,X
+    STA OSD_FG_COLOR
+    LDA PAL_BG_TABLE+255,X
+    STA OSD_BG_COLOR
+    JMP GOT_LUT
+GET_LUT_LO:
+    LDX CURRENT_IMG
+    DEX
+    LDA PAL_FG_TABLE,X
+    STA OSD_FG_COLOR
+    LDA PAL_BG_TABLE,X
+    STA OSD_BG_COLOR
+GOT_LUT:
 
-    ; Write Palette (512 bytes) to VRAM $1FA00
+    ; Write Palette (512 bytes) to VRAM $1FA00 (100% UNTOUCHED! No modifying entries!)
     LDA #$00
     STA VERA_CTRL
     STA VERA_ADDR_L
@@ -476,6 +561,10 @@ CP_PAL_P2:
     ; Stream 150 consecutive Blocks (76,800 bytes) directly to VERA
     LDA #150
     STA BLOCK_COUNT
+    LDA #<$5000
+    STA SAVE_PTR
+    LDA #>$5000
+    STA SAVE_PTR+1
 
 STREAM_150_BLOCKS:
     LDA CURR_BLK_L
@@ -483,14 +572,35 @@ STREAM_150_BLOCKS:
     LDA CURR_BLK_H
     STA MLI_BLK_NUM+1
 
-    ; Do not enter the ProDOS MLI while the music IRQ is enabled. The pending
-    ; VSYNC request is serviced immediately after the read returns.
+    ; Do not enter the ProDOS MLI while the music IRQ is enabled.
     SEI
     JSR READ_BLOCK_MLI
     CLI
     BCS READ_IMG_FAIL
 
-    ; Stream 512 bytes directly to VERA_DATA0
+    ; Check if this is one of the last 5 blocks (BLOCK_COUNT <= 5)
+    LDA BLOCK_COUNT
+    CMP #6
+    BCS STREAM_NORMAL_BLOCK
+
+    ; Save DATA_BUF (512 bytes) to SAVED_ROW29 in RAM ($5000..$59FF)
+    LDY #$00
+SAVE_ROW29_P1:
+    LDA DATA_BUF,Y
+    STA (SAVE_PTR),Y
+    INY
+    BNE SAVE_ROW29_P1
+    INC SAVE_PTR+1
+    LDY #$00
+SAVE_ROW29_P2:
+    LDA DATA_BUF+$100,Y
+    STA (SAVE_PTR),Y
+    INY
+    BNE SAVE_ROW29_P2
+    INC SAVE_PTR+1
+
+STREAM_NORMAL_BLOCK:
+    ; Stream 512 bytes directly to VERA_DATA0 (music IRQ advances uninterrupted here)
     LDY #$00
 CP_IMG_P1:
     LDA DATA_BUF,Y
@@ -516,6 +626,10 @@ NO_BLK_C_INC:
     LDA #$00
     STA VERA_DC_BOR
     JSR UPDATE_IMAGE_NUMBER
+    LDA OSD_ENABLED
+    BEQ LOAD_IMG_NO_OSD
+    JSR RENDER_OSD_TEXT
+LOAD_IMG_NO_OSD:
     RTS
 
 READ_PAL_FAIL:
@@ -531,15 +645,15 @@ READ_IMG_FAIL:
 UPDATE_IMAGE_NUMBER:
     ; Apple II text page 1, row 24, right-aligned: "IMG: nnn/375".
     ; The Apple II text display is independent from the fullscreen VERA output.
-    LDA #$C9              ; I
-    STA $07EC
-    LDA #$CD              ; M
-    STA $07ED
-    LDA #$C7              ; G
-    STA $07EE
-    LDA #$BA              ; colon
-    STA $07EF
     LDA #$A0              ; space
+    STA $07EC
+    LDA #$C9              ; I
+    STA $07ED
+    LDA #$CD              ; M
+    STA $07EE
+    LDA #$C7              ; G
+    STA $07EF
+    LDA #$BA              ; colon
     STA $07F0
     LDA CURRENT_IMG
     STA MULT_TEMP
@@ -603,6 +717,7 @@ IMAGE_TENS_DONE:
 ; ===========================================================================
 
 INIT_CANYON_MUSIC:
+    JSR CLEAR_PSG_SHADOW
     LDA #<$4000
     STA MUSIC_PTR_L
     LDA #>$4000
@@ -672,6 +787,7 @@ MUSIC_PREV_DEC:
 MUSIC_SELECT:
     ; Reset all voices so the previous soundtrack cannot leave residual notes.
     JSR SILENCE_PSG
+    JSR CLEAR_PSG_SHADOW
     LDA #<$4000
     STA MUSIC_PTR_L
     LDA #>$4000
@@ -783,6 +899,7 @@ MUSIC_DECODE_READY:
     CMP #$80
     BCC MUSIC_SET_DELAY
     AND #$3F
+    TAX
     CLC
     ADC #$C0
     STA VERA_ADDR_L
@@ -793,6 +910,7 @@ MUSIC_DECODE_READY:
     STA VERA_ADDR_H
     LDY #$01
     LDA (MUSIC_PTR_L),Y
+    STA PSG_SHADOW,X
     STA VERA_DATA0
     JSR MUSIC_ADVANCE_2
     JMP MUSIC_DECODE
@@ -835,7 +953,23 @@ MUSIC_ADVANCE_2:
     JMP MUSIC_ADVANCE_1
 
 UPDATE_MUSIC_NAME:
-    ; Apple II text page 1, bottom-left: "MUSIC: <name>"
+    LDA MUSIC_MUTE
+    BEQ UPDATE_MNAME_ACTIVE
+
+    ; Muted: clear entire bottom-left text (16 chars $07D0..$07DF) with spaces
+    LDY #$00
+    LDA #$A0
+CLR_MNAME_TEXT:
+    STA $07D0,Y
+    INY
+    CPY #16
+    BCC CLR_MNAME_TEXT
+    LDA #$01
+    STA OSD_DIRTY
+    RTS
+
+UPDATE_MNAME_ACTIVE:
+    ; Apple II text page 1, bottom-left: "MUSIC:<name>"
     LDA #$CD              ; M
     STA $07D0
     LDA #$D5              ; U
@@ -848,8 +982,6 @@ UPDATE_MUSIC_NAME:
     STA $07D4
     LDA #$BA              ; :
     STA $07D5
-    LDA #$A0              ; space
-    STA $07D6
     LDX MUSIC_INDEX
     LDA MUSIC_NAME_PTR_LO,X
     STA MUSIC_NAME_PTR
@@ -858,10 +990,14 @@ UPDATE_MUSIC_NAME:
     LDY #$00
 MUSIC_NAME_COPY:
     LDA (MUSIC_NAME_PTR),Y
-    STA $07D7,Y
+    STA $07D6,Y
     INY
     CPY #$09
     BCC MUSIC_NAME_COPY
+    LDA #$A0              ; clear 10th char
+    STA $07DF
+    LDA #$01
+    STA OSD_DIRTY
     RTS
 
 REFILL_CANYON_BUFFER:
@@ -902,6 +1038,33 @@ SILENCE_PSG_LOOP:
     BNE SILENCE_PSG_LOOP
     RTS
 
+RESTORE_PSG_FROM_SHADOW:
+    LDA #$00
+    STA VERA_CTRL
+    LDA #$C0
+    STA VERA_ADDR_L
+    LDA #$F9
+    STA VERA_ADDR_M
+    LDA #$11            ; Bank 1, Stride +1 ($1F9C0)
+    STA VERA_ADDR_H
+    LDX #$00
+RESTORE_PSG_LOOP:
+    LDA PSG_SHADOW,X
+    STA VERA_DATA0
+    INX
+    CPX #$40
+    BCC RESTORE_PSG_LOOP
+    RTS
+
+CLEAR_PSG_SHADOW:
+    LDX #$3F
+    LDA #$00
+CLR_SHADOW_LOOP:
+    STA PSG_SHADOW,X
+    DEX
+    BPL CLR_SHADOW_LOOP
+    RTS
+
 ; ==============================================================================
 ; Low-Level ProDOS MLI Direct Block Read Call ($80)
 ; ==============================================================================
@@ -939,9 +1102,352 @@ MUSIC_NAME_PTR_LO:
     !byte <MUSIC_NAME_0,<MUSIC_NAME_1,<MUSIC_NAME_2
 MUSIC_NAME_PTR_HI:
     !byte >MUSIC_NAME_0,>MUSIC_NAME_1,>MUSIC_NAME_2
+MUSIC_NAME_LEN:
+    !byte 8, 6, 9
 MUSIC_NAME_0:
     !byte $D3,$C2,$AD,$C9,$CE,$D4,$D2,$CF,$A0
 MUSIC_NAME_1:
     !byte $C3,$C1,$CE,$D9,$CF,$CE,$A0,$A0,$A0
 MUSIC_NAME_2:
     !byte $C7,$D2,$C5,$C5,$CE,$C8,$C9,$CC,$CC
+TEXT_MUTE_STR:
+    !byte $DB,$CD,$D5,$D4,$C5,$DD,$A0,$A0,$A0  ; "[MUTE]   "
+
+; ==============================================================================
+; OSD Direct Bitmap Row 29 Rendering Engine (VRAM $12200..$12BFF)
+; ==============================================================================
+RENDER_OSD_TEXT:
+    JSR RESTORE_ROW29
+    JSR FORMAT_OSD_STRING
+
+    LDA #$00
+    STA OSD_ROW_IDX
+
+OSD_ROW_LOOP:
+    LDX OSD_ROW_IDX
+    LDA #$00
+    STA VERA_CTRL
+    LDA ROW29_ADDR_LO,X
+    STA VERA_ADDR_L
+    LDA ROW29_ADDR_HI,X
+    STA VERA_ADDR_M
+    LDA #$11            ; Bank 1, Stride +1 ($12200)
+    STA VERA_ADDR_H
+
+    LDA #$00
+    STA OSD_COL_IDX
+    LDA LEFT_BADGE_END
+    BNE OSD_COL_LOOP
+
+    ; Left badge disabled (MUTE) - skip directly to right badge at col 29
+    LDA RIGHT_ADDR_LO,X
+    STA VERA_ADDR_L
+    LDA RIGHT_ADDR_HI,X
+    STA VERA_ADDR_M
+    LDA #$11            ; Bank 1, Stride +1
+    STA VERA_ADDR_H
+    LDA #29
+    STA OSD_COL_IDX
+
+OSD_COL_LOOP:
+    LDX OSD_COL_IDX
+    LDA OSD_LINE_BUF,X
+    SEC
+    SBC #$20            ; Map ASCII to font index (32 -> 0)
+    BCC OSD_GLYPH_SPACE
+    CMP #64
+    BCC OSD_GLYPH_OK
+OSD_GLYPH_SPACE:
+    LDA #$00
+OSD_GLYPH_OK:
+    CMP #32
+    BCS OSD_GLYPH_P2
+
+    ; Glyph in Page 1 (0..31)
+    ASL
+    ASL
+    ASL
+    ORA OSD_ROW_IDX
+    TAY
+    LDA FONT_8X8,Y
+    STA OSD_FONT_BYTE
+    JMP OSD_OUTPUT_8PIXELS
+
+OSD_GLYPH_P2:
+    ; Glyph in Page 2 (32..63)
+    SEC
+    SBC #32
+    ASL
+    ASL
+    ASL
+    ORA OSD_ROW_IDX
+    TAY
+    LDA FONT_8X8+$100,Y
+    STA OSD_FONT_BYTE
+
+OSD_OUTPUT_8PIXELS:
+    ; Output 8 pixels for this glyph row to VERA_DATA0
+    LDA OSD_BG_COLOR
+    ASL OSD_FONT_BYTE
+    BCC P0_OUT
+    LDA OSD_FG_COLOR
+P0_OUT:
+    STA VERA_DATA0
+
+    LDA OSD_BG_COLOR
+    ASL OSD_FONT_BYTE
+    BCC P1_OUT
+    LDA OSD_FG_COLOR
+P1_OUT:
+    STA VERA_DATA0
+
+    LDA OSD_BG_COLOR
+    ASL OSD_FONT_BYTE
+    BCC P2_OUT
+    LDA OSD_FG_COLOR
+P2_OUT:
+    STA VERA_DATA0
+
+    LDA OSD_BG_COLOR
+    ASL OSD_FONT_BYTE
+    BCC P3_OUT
+    LDA OSD_FG_COLOR
+P3_OUT:
+    STA VERA_DATA0
+
+    LDA OSD_BG_COLOR
+    ASL OSD_FONT_BYTE
+    BCC P4_OUT
+    LDA OSD_FG_COLOR
+P4_OUT:
+    STA VERA_DATA0
+
+    LDA OSD_BG_COLOR
+    ASL OSD_FONT_BYTE
+    BCC P5_OUT
+    LDA OSD_FG_COLOR
+P5_OUT:
+    STA VERA_DATA0
+
+    LDA OSD_BG_COLOR
+    ASL OSD_FONT_BYTE
+    BCC P6_OUT
+    LDA OSD_FG_COLOR
+P6_OUT:
+    STA VERA_DATA0
+
+    LDA OSD_BG_COLOR
+    ASL OSD_FONT_BYTE
+    BCC P7_OUT
+    LDA OSD_FG_COLOR
+P7_OUT:
+    STA VERA_DATA0
+
+    INC OSD_COL_IDX
+    LDA OSD_COL_IDX
+    CMP LEFT_BADGE_END
+    BNE CHK_COL_RIGHT_DONE
+    ; Jump from left badge to right badge (col 29), skipping middle cols
+    LDX OSD_ROW_IDX
+    LDA RIGHT_ADDR_LO,X
+    STA VERA_ADDR_L
+    LDA RIGHT_ADDR_HI,X
+    STA VERA_ADDR_M
+    LDA #$11            ; Bank 1, Stride +1
+    STA VERA_ADDR_H
+    LDA #29
+    STA OSD_COL_IDX
+    JMP OSD_COL_LOOP
+
+CHK_COL_RIGHT_DONE:
+    CMP #40
+    BCS OSD_COL_DONE
+    JMP OSD_COL_LOOP
+OSD_COL_DONE:
+
+    INC OSD_ROW_IDX
+    LDA OSD_ROW_IDX
+    CMP #8
+    BCS OSD_ROW_DONE
+    JMP OSD_ROW_LOOP
+OSD_ROW_DONE:
+    RTS
+
+RESTORE_ROW29:
+    LDA #$00
+    STA VERA_CTRL
+    STA VERA_ADDR_L
+    LDA #$22
+    STA VERA_ADDR_M
+    LDA #$11            ; Bank 1, Stride +1 ($12200)
+    STA VERA_ADDR_H
+
+    LDA #<$5000
+    STA SAVE_PTR
+    LDA #>$5000
+    STA SAVE_PTR+1
+
+    LDX #10             ; 10 pages x 256 bytes = 2,560 bytes
+RESTORE_PAGE_LOOP:
+    LDY #$00
+RESTORE_BYTE_LOOP:
+    LDA (SAVE_PTR),Y
+    STA VERA_DATA0
+    INY
+    BNE RESTORE_BYTE_LOOP
+    INC SAVE_PTR+1
+    DEX
+    BNE RESTORE_PAGE_LOOP
+    RTS
+
+FORMAT_OSD_STRING:
+    ; 1. Clear 40-byte buffer with spaces (ASCII $20)
+    LDX #39
+    LDA #$20
+OSD_CLR_BUF:
+    STA OSD_LINE_BUF,X
+    DEX
+    BPL OSD_CLR_BUF
+
+    LDA MUSIC_MUTE
+    BEQ OSD_FMT_MNAME
+
+    ; Muted: no left badge at all (LEFT_BADGE_END = 0)
+    LDA #$00
+    STA LEFT_BADGE_END
+    JMP OSD_FMT_IMG
+
+OSD_FMT_MNAME:
+    ; 2. Write "MUSIC:" (cols 0..5, no trailing space)
+    LDA #$4D            ; 'M'
+    STA OSD_LINE_BUF+0
+    LDA #$55            ; 'U'
+    STA OSD_LINE_BUF+1
+    LDA #$53            ; 'S'
+    STA OSD_LINE_BUF+2
+    LDA #$49            ; 'I'
+    STA OSD_LINE_BUF+3
+    LDA #$43            ; 'C'
+    STA OSD_LINE_BUF+4
+    LDA #$3A            ; ':'
+    STA OSD_LINE_BUF+5
+
+    ; 3. Write music name (cols 6..)
+    LDX MUSIC_INDEX
+    LDA MUSIC_NAME_LEN,X
+    CLC
+    ADC #$06            ; 6 + Name Length (tight badge without trailing spaces!)
+    STA LEFT_BADGE_END
+    LDY #$00
+OSD_MNAME_LOOP:
+    LDA (MUSIC_NAME_PTR),Y
+    AND #$7F            ; Strip Apple II high bit
+    STA OSD_LINE_BUF+6,Y
+    INY
+    CPY #$09
+    BCC OSD_MNAME_LOOP
+
+OSD_FMT_IMG:
+    ; 5. Write "IMG:" (cols 29..32, no spaces)
+    LDA #$49            ; 'I'
+    STA OSD_LINE_BUF+29
+    LDA #$4D            ; 'M'
+    STA OSD_LINE_BUF+30
+    LDA #$47            ; 'G'
+    STA OSD_LINE_BUF+31
+    LDA #$3A            ; ':'
+    STA OSD_LINE_BUF+32
+
+    ; 6. Format Current Image Index into 3 decimal digits (cols 33..35)
+    LDA CURRENT_IMG
+    STA MULT_TEMP
+    LDA CURRENT_IMG_H
+    STA MULT_TEMP_H
+
+    LDX #$00
+OSD_HUND:
+    LDA MULT_TEMP_H
+    BNE OSD_SUB_100
+    LDA MULT_TEMP
+    CMP #$64
+    BCC OSD_HUND_DONE
+OSD_SUB_100:
+    LDA MULT_TEMP
+    SEC
+    SBC #$64
+    STA MULT_TEMP
+    LDA MULT_TEMP_H
+    SBC #$00
+    STA MULT_TEMP_H
+    INX
+    JMP OSD_HUND
+OSD_HUND_DONE:
+    TXA
+    CLC
+    ADC #$30
+    STA OSD_LINE_BUF+33
+
+    LDY #$00
+OSD_TENS:
+    LDA MULT_TEMP
+    CMP #$0A
+    BCC OSD_TENS_DONE
+    SEC
+    SBC #$0A
+    STA MULT_TEMP
+    INY
+    JMP OSD_TENS
+OSD_TENS_DONE:
+    TYA
+    CLC
+    ADC #$30
+    STA OSD_LINE_BUF+34
+    LDA MULT_TEMP
+    CLC
+    ADC #$30
+    STA OSD_LINE_BUF+35
+
+    ; 7. Write "/375" (cols 36..39, no spaces)
+    LDA #$2F            ; '/'
+    STA OSD_LINE_BUF+36
+    LDA #$33            ; '3'
+    STA OSD_LINE_BUF+37
+    LDA #$37            ; '7'
+    STA OSD_LINE_BUF+38
+    LDA #$35            ; '5'
+    STA OSD_LINE_BUF+39
+    RTS
+
+ROW29_ADDR_LO:
+    !byte $00, $40, $80, $C0, $00, $40, $80, $C0
+ROW29_ADDR_HI:
+    !byte $22, $23, $24, $25, $27, $28, $29, $2A
+RIGHT_ADDR_LO:
+    !byte $E8, $28, $68, $A8, $E8, $28, $68, $A8
+RIGHT_ADDR_HI:
+    !byte $22, $24, $25, $26, $27, $29, $2A, $2B
+
+OSD_ENABLED:
+    !byte $01
+OSD_DIRTY:
+    !byte $01
+OSD_LINE_BUF:
+    HEX 20 20 20 20 20 20 20 20
+    HEX 20 20 20 20 20 20 20 20
+    HEX 20 20 20 20 20 20 20 20
+    HEX 20 20 20 20 20 20 20 20
+    HEX 20 20 20 20 20 20 20 20
+
+PSG_SHADOW:
+    HEX 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00
+
+.include "palette_lut.inc"
+.include "font8x8.inc"
+
