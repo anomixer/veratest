@@ -166,6 +166,14 @@ Special thanks to the original creators, engineers, and contributors whose work 
 
 ---
 
+## 📚 Architecture & Development Guides
+
+* **[Apple II VERA Master Session & Architecture Guide](docs/vera-session.md)**: Comprehensive multi-project engineering guide covering both *Time Pilot IIvera* (Release v1.9) and *veratest* (zero-disk streaming, PSG audio synthesis, memory layouts, Mode 7 OSD, and hardware gotchas).
+* **[AI Agent & Developer Guide](AGENTS.md)**: Detailed memory maps, softswitches, MLI calling conventions, and testing procedures for `veratest`.
+
+---
+
 ## 📄 License
 
 MIT License © 2026 [anomixer](https://github.com/anomixer).
+
