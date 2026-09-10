@@ -326,7 +326,9 @@ export const assemble6502 = (lines, startAddress = 0x2000, extraLabels = {}) => 
     const parts = line.split(/\s+/)
     const instr = parts[0].toUpperCase()
     const isDataDir = (instr === "HEX" || instr === "!BYTE" || instr === ".BYTE" || instr === "!WORD" || instr === ".WORD" || instr === "DW" || instr === "DA" || instr === "ASC")
-    const operand = isDataDir ? parts.slice(1).join(" ") : parts.slice(1).join("")
+    // ASC strings must preserve internal spaces (column-aligned headers), so
+    // take everything after the mnemonic instead of re-joining split tokens.
+    const operand = instr === "ASC" ? line.slice(parts[0].length).trim() : (isDataDir ? parts.slice(1).join(" ") : parts.slice(1).join(""))
     const b = getEncodedBytes(instr, operand, pc, labels)
     pc += b.length
   }
@@ -352,7 +354,8 @@ export const assemble6502 = (lines, startAddress = 0x2000, extraLabels = {}) => 
     const parts = line.split(/\s+/)
     const instr = parts[0].toUpperCase()
     const isDataDir = (instr === "HEX" || instr === "!BYTE" || instr === ".BYTE" || instr === "!WORD" || instr === ".WORD" || instr === "DW" || instr === "DA" || instr === "ASC")
-    const operand = isDataDir ? parts.slice(1).join(" ") : parts.slice(1).join("")
+    // ASC strings must preserve internal spaces (column-aligned headers).
+    const operand = instr === "ASC" ? line.slice(parts[0].length).trim() : (isDataDir ? parts.slice(1).join(" ") : parts.slice(1).join(""))
     const b = getEncodedBytes(instr, operand, pc, labels)
     bytes.push(...b)
     pc += b.length
