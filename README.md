@@ -155,10 +155,10 @@ Special thanks to the original creators, engineers, and contributors whose work 
 - **[Frank van den Hoef](https://github.com/fvdhoef/vera-module)** – Creator and hardware designer of the VERA FPGA system.
 - **[Michael Steil](https://github.com/mist64)** – Commander X16 emulator architecture and core implementation.
 - **[David Murray (The 8-Bit Guy)](https://www.the8bitguy.com/)** – Creator and visionary of the Commander X16 project.
+- **[Michael Morrison](https://github.com/code-bythepound)** – Initiator of the A2VERA project, who ported the VERA core to TypeScript and adapted it for both Apple II and web emulation.
+- **[Chris Torrence (ct6502)](https://github.com/ct6502)** – Creator of the [Apple2TS](https://apple2ts.com) web emulator ecosystem.
 - **[Anthony Henry (ahenry3068)](https://github.com/ahenry3068)** – Creator of the original Commander X16 75-Image Fullscreen 256-Color Slideshow and Bitmap Assets.
 - **[ZeroByte (ZeroByteOrg)](https://github.com/ZeroByteOrg/sonicdemo)** – Creator of the original *Sonic The Hedgehog: Green Hill Zone* dual-layer parallax engine and demo for Commander X16.
-- **[Mike Morrison](https://github.com/code-bythepound)** – Porting the VERA core to TypeScript and adapting it for Apple II / web emulation.
-- **[Chris Torrence (ct6502)](https://github.com/ct6502)** – Creator of the [Apple2TS](https://apple2ts.com) web emulator ecosystem.
 - **[Original X16 Demo Authors](https://github.com/X16Community/x16-demo)**:
   - Mode 4 RPG Tilemap Demo & Graphics Assets.
   - Scrolling Electricity Dual-Layer Demo.
@@ -170,6 +170,12 @@ Special thanks to the original creators, engineers, and contributors whose work 
 
 * **[Apple II VERA Master Session & Architecture Guide](docs/vera-session.md)**: Comprehensive multi-project engineering guide covering both *Time Pilot IIvera* (Release v1.9) and *veratest* (zero-disk streaming, PSG audio synthesis, memory layouts, Mode 7 OSD, and hardware gotchas).
 * **[AI Agent & Developer Guide](AGENTS.md)**: Detailed memory maps, softswitches, MLI calling conventions, and testing procedures for `veratest`.
+
+---
+
+## 🌐 Apple II VERA Resources
+
+- **[Awesome A2VERA](https://github.com/anomixer/awesome-a2vera)** – A curated list of awesome A2VERA (Apple II VERA) resources.
 
 ---
 
