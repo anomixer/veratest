@@ -70,6 +70,12 @@ START:
 
     ; 3. Load SONIC.DAT via ProDOS MLI ($C8 OPEN, $CA READ, $CC CLOSE)
     JSR LOAD_SONIC_ASSETS
+    BCC SONIC_ASSETS_READY
+    LDA #$00
+    STA VERA_DC_VID
+    JSR SHOW_SONIC_ERROR
+    RTS
+SONIC_ASSETS_READY:
 
     ; 4. Configure Layer 0 (Background: 64x32 4bpp, Map at $04800, Tiles at $08000)
     LDA #$12            ; 4bpp Tile Mode, 64x32
@@ -405,18 +411,33 @@ MUSIC_DEST_L = $1A
 MUSIC_DEST_H = $1B
 
 ; ------------------------------------------------------------------------------
-; Direct Block MLI Streaming Engine: Reads 103 Blocks from Disk into VRAM & RAM
+; Sequential ProDOS file reader: works with SONIC.DAT in the current prefix.
 ; ------------------------------------------------------------------------------
 LOAD_SONIC_ASSETS:
-    ; 1. Copy Boot Drive Unit Number from ProDOS Global Page $BF30
-    LDA $BF30
-    STA MLI_UNIT_NUM
-
-    ; 2. Dynamically scan ProDOS Root Directory (Block 2 / Block 3) for SONIC.DAT
-    JSR LOCATE_SONIC_DAT
+    LDA #$00
+    STA REF_NUM
+    LDA #$01
+    STA SONIC_STAGE
+    JSR BUILD_SONIC_PATH
+    BCC SONIC_PATH_READY
+    JMP SONIC_OPEN_FAIL
+SONIC_PATH_READY:
+    LDA #$02
+    STA SONIC_STAGE
+    JSR $BF00
+    HEX C8
+    DA SONIC_OPEN_PARAMS
+    BCC SONIC_OPEN_OK
+    JMP SONIC_OPEN_FAIL
+SONIC_OPEN_OK:
+    LDA SONIC_OPEN_PARAMS+5
+    STA REF_NUM
 
     ; 3. Read Block 0: 512-Byte Palette -> VRAM $1FA00 (Bank 1)
-    JSR READ_BLOCK_MLI
+    JSR READ_SONIC_BLOCK
+    BCC SONIC_R0_OK
+    JMP SONIC_LOAD_FAIL
+SONIC_R0_OK:
     LDA #$00
     STA VERA_ADDR_L
     LDA #$FA
@@ -424,10 +445,12 @@ LOAD_SONIC_ASSETS:
     LDA #$11            ; Bank 1, Stride +1
     STA VERA_ADDR_H
     JSR COPY_BUF_TO_VRAM
-    JSR ADVANCE_BLOCK
 
     ; 4. Read Blocks 1..2: Flower Animation Frames -> Host RAM $3000..$33FF
-    JSR READ_BLOCK_MLI
+    JSR READ_SONIC_BLOCK
+    BCC SONIC_R1_OK
+    JMP SONIC_LOAD_FAIL
+SONIC_R1_OK:
     LDY #$00
 CP_F1_LP:
     LDA $3800,Y
@@ -436,9 +459,11 @@ CP_F1_LP:
     STA $3100,Y
     INY
     BNE CP_F1_LP
-    JSR ADVANCE_BLOCK
 
-    JSR READ_BLOCK_MLI
+    JSR READ_SONIC_BLOCK
+    BCC SONIC_R2_OK
+    JMP SONIC_LOAD_FAIL
+SONIC_R2_OK:
     LDY #$00
 CP_F2_LP:
     LDA $3800,Y
@@ -447,7 +472,6 @@ CP_F2_LP:
     STA $3300,Y
     INY
     BNE CP_F2_LP
-    JSR ADVANCE_BLOCK
 
     ; 5. Read Blocks 3..17: 15 Blocks (7680 bytes) PSG Music -> Host RAM $4000..$5DFF
     LDA #15
@@ -458,7 +482,10 @@ CP_F2_LP:
     STA MUSIC_DEST_H
 
 LOAD_MUS_LP:
-    JSR READ_BLOCK_MLI
+    JSR READ_SONIC_BLOCK
+    BCC SONIC_R3_OK
+    JMP SONIC_LOAD_FAIL
+SONIC_R3_OK:
     LDY #$00
 CP_MUS_P1:
     LDA $3800,Y
@@ -474,7 +501,6 @@ CP_MUS_P2:
     BNE CP_MUS_P2
     INC MUSIC_DEST_H
 
-    JSR ADVANCE_BLOCK
     DEC BLK_CTR
     BNE LOAD_MUS_LP
 
@@ -488,9 +514,11 @@ CP_MUS_P2:
     LDA #8
     STA BLK_CTR
 STREAM_BG:
-    JSR READ_BLOCK_MLI
+    JSR READ_SONIC_BLOCK
+    BCC SONIC_R4_OK
+    JMP SONIC_LOAD_FAIL
+SONIC_R4_OK:
     JSR COPY_BUF_TO_VRAM
-    JSR ADVANCE_BLOCK
     DEC BLK_CTR
     BNE STREAM_BG
 
@@ -503,9 +531,11 @@ STREAM_BG:
     LDA #8
     STA BLK_CTR
 STREAM_FG:
-    JSR READ_BLOCK_MLI
+    JSR READ_SONIC_BLOCK
+    BCC SONIC_R5_OK
+    JMP SONIC_LOAD_FAIL
+SONIC_R5_OK:
     JSR COPY_BUF_TO_VRAM
-    JSR ADVANCE_BLOCK
     DEC BLK_CTR
     BNE STREAM_FG
 
@@ -519,9 +549,11 @@ STREAM_FG:
     LDA #64
     STA BLK_CTR
 STREAM_TILES:
-    JSR READ_BLOCK_MLI
+    JSR READ_SONIC_BLOCK
+    BCC SONIC_R6_OK
+    JMP SONIC_LOAD_FAIL
+SONIC_R6_OK:
     JSR COPY_BUF_TO_VRAM
-    JSR ADVANCE_BLOCK
     DEC BLK_CTR
     BNE STREAM_TILES
 
@@ -534,126 +566,207 @@ STREAM_TILES:
     LDA #5
     STA BLK_CTR
 STREAM_SPRITES:
-    JSR READ_BLOCK_MLI
+    JSR READ_SONIC_BLOCK
+    BCC SONIC_R7_OK
+    JMP SONIC_LOAD_FAIL
+SONIC_R7_OK:
     JSR COPY_BUF_TO_VRAM
-    JSR ADVANCE_BLOCK
     DEC BLK_CTR
     BNE STREAM_SPRITES
-    RTS
-
-; ------------------------------------------------------------------------------
-; Helper: Scan ProDOS Directory for "SONIC.DAT" Key Block
-; ------------------------------------------------------------------------------
-LOCATE_SONIC_DAT:
-    LDA #$02            ; Start at Root Directory Block 2
-    STA DIR_BLK_L
-    LDA #$00
-    STA DIR_BLK_H
-
-SCAN_DIR_BLK:
-    LDA DIR_BLK_L
-    STA MLI_BLK_NUM
-    LDA DIR_BLK_H
-    STA MLI_BLK_NUM+1
-    JSR READ_BLOCK_MLI
-    BCS LOCATE_DEFAULT
-
-    ; Extract next directory block pointer at $3802..$3803
-    LDA $3802
-    STA NEXT_DIR_L
-    LDA $3803
-    STA NEXT_DIR_H
-
-    ; Loop over 13 entries (starting at offset 4)
-    LDA #$04
-    STA DIR_PTR_L
-    LDA #$38
-    STA DIR_PTR_H
-    LDX #13
-
-SCAN_ENTRY_LP:
-    LDY #$00
-    LDA (DIR_PTR_L),Y
-    BEQ NEXT_ENTRY_SKIP ; Inactive entry
-    AND #$0F
-    CMP #$09            ; "SONIC.DAT" length = 9
-    BNE NEXT_ENTRY_SKIP
-
-    ; Compare 9 ASCII characters
-    LDY #$01
-CHK_NAME_LP:
-    LDA (DIR_PTR_L),Y
-    CMP SONIC_NAME_TXT-1,Y
-    BNE NEXT_ENTRY_SKIP
-    INY
-    CPY #$0A
-    BNE CHK_NAME_LP
-
-    ; Match! Extract key block at offset $11 (17)
-    ; Data blocks start at key_block + 1
-    LDY #$11
-    LDA (DIR_PTR_L),Y
-    CLC
-    ADC #$01
-    STA MLI_BLK_NUM
-    LDY #$12
-    LDA (DIR_PTR_L),Y
-    ADC #$00
-    STA MLI_BLK_NUM+1
-    RTS
-
-NEXT_ENTRY_SKIP:
-    CLC
-    LDA DIR_PTR_L
-    ADC #39             ; ProDOS directory entry length = 39 bytes
-    STA DIR_PTR_L
-    LDA DIR_PTR_H
-    ADC #$00
-    STA DIR_PTR_H
-    DEX
-    BNE SCAN_ENTRY_LP
-
-    ; Check if there is another directory block
-    LDA NEXT_DIR_L
-    ORA NEXT_DIR_H
-    BEQ LOCATE_DEFAULT
-    LDA NEXT_DIR_L
-    STA DIR_BLK_L
-    LDA NEXT_DIR_H
-    STA DIR_BLK_H
-    JMP SCAN_DIR_BLK
-
-LOCATE_DEFAULT:
-    ; Fallback to default block 143 ($008F)
-    LDA #$8F
-    STA MLI_BLK_NUM
-    LDA #$00
-    STA MLI_BLK_NUM+1
-    RTS
-
-SONIC_NAME_TXT:
-    ASC "SONIC.DAT"
-
-; Helper: Low-level Direct Block MLI ($80)
-READ_BLOCK_MLI:
+    ; Close the ProDOS file and report success.
+    LDA REF_NUM
+    STA SONIC_CLOSE_PARAMS+1
     JSR $BF00
-    HEX 80              ; READ_BLOCK Call
-    DA READ_BLOCK_PARAMS
+    HEX CC
+    DA SONIC_CLOSE_PARAMS
+    LDA #$00
+    STA REF_NUM
+    CLC
     RTS
 
-READ_BLOCK_PARAMS:
-    HEX 03              ; Param count = 3
-MLI_UNIT_NUM:
-    HEX 60              ; Unit Number
-    DA $3800            ; 512-Byte Buffer ($3800..$39FF)
-MLI_BLK_NUM:
-    DA $008F            ; 16-Bit Block Number (143)
+SONIC_LOAD_FAIL:
+    LDA REF_NUM
+    BEQ SONIC_LOAD_FAIL_DONE
+    STA SONIC_CLOSE_PARAMS+1
+    JSR $BF00
+    HEX CC
+    DA SONIC_CLOSE_PARAMS
+    LDA #$00
+    STA REF_NUM
+SONIC_LOAD_FAIL_DONE:
+    SEC
+    RTS
 
-ADVANCE_BLOCK:
-    INC MLI_BLK_NUM
-    BNE ADV_BLK_DONE
-    INC MLI_BLK_NUM+1
-ADV_BLK_DONE:
+SONIC_OPEN_FAIL:
+    STA SONIC_ERROR
+    SEC
+    RTS
+
+; Read exactly 512 bytes from the open file into $3800-$39FF.
+READ_SONIC_BLOCK:
+    LDA #$03
+    STA SONIC_STAGE
+    LDA REF_NUM
+    STA SONIC_READ_PARAMS+1
+    JSR $BF00
+    HEX CA
+    DA SONIC_READ_PARAMS
+    BCS SONIC_READ_FAIL
+    LDA SONIC_READ_PARAMS+6
+    BNE SONIC_READ_FAIL
+    LDA SONIC_READ_PARAMS+7
+    CMP #$02
+    BEQ SONIC_READ_OK
+    LDA #$FE
+SONIC_READ_FAIL:
+    ; A short/error read must never be treated as a valid asset block.
+    STA SONIC_ERROR
+    SEC
+    RTS
+SONIC_READ_OK:
+    CLC
+    RTS
+
+SONIC_PATH:
+    HEX 00
+    HEX 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+SONIC_NAME:
+    ASC "SONIC.DAT"
+    HEX 00
+SONIC_PREFIX_PARAMS:
+    HEX 01
+    DA SONIC_PATH
+SONIC_ONLINE_PARAMS:
+    HEX 02,00
+    DA SONIC_ONLINE_BUF
+SONIC_ONLINE_BUF:
+    HEX 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+SONIC_VOLUME_LEN:
+    HEX 00
+SONIC_OPEN_PARAMS:
+    HEX 03
+    DA SONIC_PATH
+    DA $6000
+    HEX 00
+SONIC_READ_PARAMS:
+    HEX 04,00
+    DA $3800
+    DA $0200
+    DA $0000
+SONIC_CLOSE_PARAMS:
+    HEX 01,00
+SONIC_STAGE:
+    HEX 00
+SONIC_ERROR:
+    HEX 00
+SONIC_ERROR_TEXT:
+    ASC "SONIC FILE ERROR STAGE "
+    HEX 00
+SONIC_HEX:
+    ASC "0123456789ABCDEF"
+
+SHOW_SONIC_ERROR:
+    JSR $FC58
+    LDX #$00
+SONIC_ERROR_PRINT:
+    LDA SONIC_ERROR_TEXT,X
+    BEQ SONIC_ERROR_NUMBERS
+    JSR $FDED
+    INX
+    BNE SONIC_ERROR_PRINT
+SONIC_ERROR_NUMBERS:
+    LDA SONIC_STAGE
+    JSR SONIC_PRINT_HEX
+    LDA #$20
+    JSR $FDED
+    LDA SONIC_ERROR
+    JSR SONIC_PRINT_HEX
+    LDA #$8D
+    JSR $FDED
+    RTS
+SONIC_PRINT_HEX:
+    PHA
+    LSR
+    LSR
+    LSR
+    LSR
+    TAX
+    LDA SONIC_HEX,X
+    JSR $FDED
+    PLA
+    AND #$0F
+    TAX
+    LDA SONIC_HEX,X
+    JSR $FDED
+    RTS
+
+; GET_PREFIX returns the current ProDOS directory. Build an absolute pathname
+; so launching through BASIC.SYSTEM behaves consistently from copied folders.
+BUILD_SONIC_PATH:
+    LDA $BF30
+    STA SONIC_ONLINE_PARAMS+1
+    JSR $BF00
+    HEX C7
+    DA SONIC_PREFIX_PARAMS
+    BCS SONIC_PATH_FAIL
+    LDY SONIC_PATH
+    BEQ SONIC_PATH_ADD_ROOT_SLASH
+    LDA SONIC_PATH,Y
+    CMP #$2F
+    BEQ SONIC_PATH_APPEND_NAME
+    LDA #$2F
+    INY
+    STA SONIC_PATH,Y
+    BNE SONIC_PATH_APPEND_NAME
+SONIC_PATH_ADD_ROOT_SLASH:
+    JSR $BF00
+    HEX C5
+    DA SONIC_ONLINE_PARAMS
+    BCS SONIC_PATH_FAIL
+    LDA SONIC_ONLINE_BUF
+    AND #$0F
+    BNE SONIC_VOLUME_FOUND
+    LDA SONIC_ONLINE_BUF+1
+    JMP SONIC_PATH_FAIL
+SONIC_VOLUME_FOUND:
+    STA SONIC_VOLUME_LEN
+    LDY #$01
+    LDA #$2F
+    STA SONIC_PATH,Y
+    LDX #$00
+SONIC_PATH_VOLUME_LOOP:
+    LDA SONIC_ONLINE_BUF+1,X
+    INY
+    STA SONIC_PATH,Y
+    INX
+    CPX SONIC_VOLUME_LEN
+    BCC SONIC_PATH_VOLUME_LOOP
+    LDA #$2F
+    INY
+    STA SONIC_PATH,Y
+SONIC_PATH_APPEND_NAME:
+    LDX #$00
+SONIC_PATH_NAME_LOOP:
+    LDA SONIC_NAME,X
+    BEQ SONIC_PATH_DONE
+    INY
+    STA SONIC_PATH,Y
+    INX
+    BNE SONIC_PATH_NAME_LOOP
+SONIC_PATH_DONE:
+    TYA
+    STA SONIC_PATH
+    CLC
+    RTS
+SONIC_PATH_FAIL:
+    SEC
     RTS
 
 ; Helper: Copy 512 bytes from $3800..$39FF to VERA_DATA0

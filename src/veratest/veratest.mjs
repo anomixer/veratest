@@ -1,5 +1,7 @@
 import fs from "fs"
+import os from "os"
 import path from "path"
+import { execFileSync } from "child_process"
 import { fileURLToPath } from "url"
 import { assembleAsmFile } from "../asm6502.mjs"
 import { compileApplesoftBasic } from "../applebasic.mjs"
@@ -27,194 +29,111 @@ const buildMode4Binary = (slot = 2) => {
   return new Uint8Array([...codeBytes, ...pal, ...map, ...til])
 }
 
-// Build ProDOS 2.4.3 Disk Image
+// Build the 140KB ProDOS disk through Cadius. Preserve the system boot files
+// from the ProDOS baseline, while Cadius handles every directory/file update.
 const buildProDosDisk = () => {
   const basePoPath = path.join(projectRoot, "assets", "ProDOS 2.4.3.po")
   if (!fs.existsSync(basePoPath)) {
     throw new Error(`Base ProDOS 2.4.3.po not found at ${basePoPath}!`)
   }
-  const disk = new Uint8Array(fs.readFileSync(basePoPath))
 
-  const bitmap = disk.subarray(6 * 512, 7 * 512)
-  const isBlockFree = (b) => (bitmap[Math.floor(b / 8)] & (1 << (7 - (b % 8)))) !== 0
-  const markBlockUsed = (b) => { bitmap[Math.floor(b / 8)] &= ~(1 << (7 - (b % 8))) }
-  const markBlockFree = (b) => { bitmap[Math.floor(b / 8)] |= (1 << (7 - (b % 8))) }
+  const cadius = process.env.CADIUS || path.join(projectRoot, "tools", "cadius.exe")
+  if (!fs.existsSync(cadius) && !process.env.CADIUS) {
+    throw new Error(`Cadius not found at ${cadius}; set CADIUS or install Cadius on PATH.`)
+  }
+  const volumeName = "VERATEST"
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "veratest-po-"))
+  const imagePath = path.join(tempRoot, "veratest.po")
+  const stageDir = path.join(tempRoot, "files")
+  fs.mkdirSync(stageDir)
 
-  let freeBlockSearch = 7
-  const allocateBlock = () => {
-    while (freeBlockSearch < 280) {
-      if (isBlockFree(freeBlockSearch)) {
-        const b = freeBlockSearch++
-        markBlockUsed(b)
-        disk.fill(0, b * 512, (b + 1) * 512)
-        return b
+  const runCadius = (...args) => execFileSync(cadius, args, { stdio: "inherit" })
+  const listRootEntries = (image) => {
+    const disk = fs.readFileSync(image)
+    const entries = []
+    const visited = new Set()
+    let blockNumber = 2
+    while (blockNumber && !visited.has(blockNumber)) {
+      visited.add(blockNumber)
+      const blockOffset = blockNumber * 512
+      if (blockOffset + 512 > disk.length) throw new Error("Invalid ProDOS directory chain")
+      const block = disk.subarray(blockOffset, blockOffset + 512)
+      const nextBlock = block[2] | (block[3] << 8)
+      const firstSlot = blockNumber === 2 ? 1 : 0
+      for (let slot = firstSlot; slot < 13; slot++) {
+        const offset = 4 + slot * 39
+        const storageName = block[offset]
+        const storageType = storageName >> 4
+        const nameLength = storageName & 0x0F
+        if (!storageType || !nameLength) continue
+        const name = block.toString("ascii", offset + 1, offset + 1 + nameLength)
+        entries.push({ name, isDirectory: storageType === 0x0D })
       }
-      freeBlockSearch++
+      blockNumber = nextBlock
     }
-    throw new Error("Disk full: no free blocks")
+    return entries
   }
 
-  let fileCount = 0
-  let currBlock = 2
+  try {
+    fs.copyFileSync(basePoPath, imagePath)
+    runCadius("RENAMEVOLUME", imagePath, volumeName)
 
-  while (currBlock !== 0) {
-    const blk = disk.subarray(currBlock * 512, (currBlock + 1) * 512)
-    const next = blk[0x02] | (blk[0x03] << 8)
-
-    for (let i = 0; i < 13; i++) {
-      const off = 4 + i * 39
-      if (currBlock === 2 && i === 0) continue
-
-      const stLen = blk[off]
-      if (stLen === 0) continue
-
-      const nameLen = stLen & 0x0F
-      const name = String.fromCharCode(...blk.subarray(off + 1, off + 1 + nameLen))
-
-      if (name === "PRODOS" || name === "BASIC.SYSTEM") {
-        fileCount++
-        continue
-      }
-
-      const stType = (stLen >> 4) & 0x0F
-      const keyBlk = blk[off + 0x11] | (blk[off + 0x12] << 8)
-
-      if (stType === 1) {
-        markBlockFree(keyBlk)
-      } else if (stType === 2) {
-        const idxBlk = disk.subarray(keyBlk * 512, (keyBlk + 1) * 512)
-        markBlockFree(keyBlk)
-        for (let b = 0; b < 256; b++) {
-          const db = idxBlk[b] | (idxBlk[b + 256] << 8)
-          if (db !== 0) markBlockFree(db)
-        }
-      }
-
-      blk.fill(0, off, off + 39)
-    }
-    currBlock = next
-  }
-
-  const addFile = (filename, type, aux, data) => {
-    const size = data.length
-    let stType, keyBlock
-
-    if (size <= 512) {
-      stType = 1
-      keyBlock = allocateBlock()
-      disk.set(data, keyBlock * 512)
-    } else {
-      stType = 2
-      keyBlock = allocateBlock()
-      const indexBlk = disk.subarray(keyBlock * 512, (keyBlock + 1) * 512)
-      const numBlocks = Math.ceil(size / 512)
-      for (let i = 0; i < numBlocks; i++) {
-        const db = allocateBlock()
-        const chunk = data.subarray(i * 512, Math.min(size, (i + 1) * 512))
-        disk.set(chunk, db * 512)
-        indexBlk[i] = db & 0xFF
-        indexBlk[i + 256] = (db >> 8) & 0xFF
-      }
+    // Keep only the two files required to boot ProDOS/BASIC.SYSTEM. Remove
+    // bundled utilities from the baseline through Cadius so its bitmap and
+    // catalog remain consistent.
+    for (const entry of listRootEntries(imagePath)) {
+      if (entry.name === "PRODOS" || entry.name === "BASIC.SYSTEM") continue
+      const command = entry.isDirectory ? "DELETEFOLDER" : "DELETEFILE"
+      runCadius(command, imagePath, `/${volumeName}/${entry.name}`)
     }
 
-    const blocksUsed = stType === 1 ? 1 : 1 + Math.ceil(size / 512)
-
-    let blkNum = 2
-    let found = false
-
-    while (blkNum !== 0 && !found) {
-      const blk = disk.subarray(blkNum * 512, (blkNum + 1) * 512)
-      const next = blk[0x02] | (blk[0x03] << 8)
-
-      for (let i = 0; i < 13; i++) {
-        const off = 4 + i * 39
-        if (blkNum === 2 && i === 0) continue
-
-        if (blk[off] === 0) {
-          blk[off] = (stType << 4) | (filename.length & 0x0F)
-          for (let c = 0; c < 15; c++) {
-            blk[off + 1 + c] = c < filename.length ? filename.charCodeAt(c) : 0x00
-          }
-          blk[off + 0x10] = type
-          blk[off + 0x11] = keyBlock & 0xFF
-          blk[off + 0x12] = (keyBlock >> 8) & 0xFF
-          blk[off + 0x13] = blocksUsed & 0xFF
-          blk[off + 0x14] = (blocksUsed >> 8) & 0xFF
-          blk[off + 0x15] = size & 0xFF
-          blk[off + 0x16] = (size >> 8) & 0xFF
-          blk[off + 0x17] = (size >> 16) & 0xFF
-          blk[off + 0x1E] = 0xC3 // Access: Fully UNLOCKED (Read, Write, Rename, Destroy)
-          blk[off + 0x1F] = aux & 0xFF
-          blk[off + 0x20] = (aux >> 8) & 0xFF
-          blk[off + 0x25] = 0x02 // Header pointer
-          blk[off + 0x26] = 0x00
-          fileCount++
-          found = true
-          break
-        }
-      }
-      blkNum = next
+    const addFile = (filename, type, aux, data) => {
+      const suffix = `#${type.toString(16).padStart(2, "0")}${aux.toString(16).padStart(4, "0")}`
+      const sourcePath = path.join(stageDir, `${filename}${suffix}`)
+      fs.writeFileSync(sourcePath, data)
+      runCadius("ADDFILE", imagePath, `/${volumeName}`, sourcePath)
     }
+
+    const sprite2 = assembleAsmFile(veratestDir, "sprite.asm", 2, 0x2000)
+    const sprite4 = assembleAsmFile(veratestDir, "sprite.asm", 4, 0x2000)
+    const spritesnd2 = assembleAsmFile(veratestDir, "spritesnd.asm", 2, 0x2000)
+    const spritesnd4 = assembleAsmFile(veratestDir, "spritesnd.asm", 4, 0x2000)
+    const mode72 = buildMode7Binary(2)
+    const mode74 = buildMode7Binary(4)
+    const mode42 = buildMode4Binary(2)
+    const mode44 = buildMode4Binary(4)
+    const layer2 = assembleAsmFile(veratestDir, "layer.asm", 2, 0x2000)
+    const layer4 = assembleAsmFile(veratestDir, "layer.asm", 4, 0x2000)
+    const matrix2 = assembleAsmFile(veratestDir, "matrix.asm", 2, 0x2000)
+    const matrix4 = assembleAsmFile(veratestDir, "matrix.asm", 4, 0x2000)
+    const sonic2 = assembleAsmFile(veratestDir, "sonic.asm", 2, 0x2000)
+    const sonic4 = assembleAsmFile(veratestDir, "sonic.asm", 4, 0x2000)
+    const sonicDat = fs.readFileSync(path.join(veratestDir, "sonic.dat"))
+    const startup = compileApplesoftBasic(veratestDir, "startup.bas")
+
+    const programs = [
+      ["SPRITE.BIN", 0x06, 0x2000, sprite2], ["SPRITE4.BIN", 0x06, 0x2000, sprite4],
+      ["SPRSND.BIN", 0x06, 0x2000, spritesnd2], ["SPRSND4.BIN", 0x06, 0x2000, spritesnd4],
+      ["MODE7.BIN", 0x06, 0x2000, mode72], ["MODE74.BIN", 0x06, 0x2000, mode74],
+      ["TILEMAP.BIN", 0x06, 0x2000, mode42], ["TILEMAP4.BIN", 0x06, 0x2000, mode44],
+      ["LAYER.BIN", 0x06, 0x2000, layer2], ["LAYER4.BIN", 0x06, 0x2000, layer4],
+      ["MATRIX.BIN", 0x06, 0x2000, matrix2], ["MATRIX4.BIN", 0x06, 0x2000, matrix4],
+      ["SONIC.BIN", 0x06, 0x2000, sonic2], ["SONIC4.BIN", 0x06, 0x2000, sonic4],
+      ["SONIC.DAT", 0x00, 0x0000, sonicDat], ["STARTUP", 0xFC, 0x0801, startup],
+    ]
+    for (const [name, type, aux, data] of programs) addFile(name, type, aux, data)
+
+    runCadius("CHECKVOLUME", imagePath)
+    runCadius("CATALOG", imagePath)
+    const outputPath = path.join(projectRoot, "veratest.po")
+    safeWriteFileSync(outputPath, fs.readFileSync(imagePath))
+    console.log(`Successfully created Cadius ProDOS disk: ${outputPath}`)
+    console.log(`Total application files: ${programs.length}`)
+    console.log(`  - SONIC.DAT: ${sonicDat.length} bytes (Sonic assets/music container)`)
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true })
   }
 
-  // 1. Assemble 6502 Showcases
-  const sprite2   = assembleAsmFile(veratestDir, "sprite.asm", 2, 0x2000)
-  const sprite4   = assembleAsmFile(veratestDir, "sprite.asm", 4, 0x2000)
-  const spritesnd2= assembleAsmFile(veratestDir, "spritesnd.asm", 2, 0x2000)
-  const spritesnd4= assembleAsmFile(veratestDir, "spritesnd.asm", 4, 0x2000)
-  const mode72    = buildMode7Binary(2)
-  const mode74    = buildMode7Binary(4)
-  const mode42    = buildMode4Binary(2)
-  const mode44    = buildMode4Binary(4)
-  const layer2    = assembleAsmFile(veratestDir, "layer.asm", 2, 0x2000)
-  const layer4    = assembleAsmFile(veratestDir, "layer.asm", 4, 0x2000)
-  const matrix2   = assembleAsmFile(veratestDir, "matrix.asm", 2, 0x2000)
-  const matrix4   = assembleAsmFile(veratestDir, "matrix.asm", 4, 0x2000)
-  const sonic2    = assembleAsmFile(veratestDir, "sonic.asm", 2, 0x2000)
-  const sonic4    = assembleAsmFile(veratestDir, "sonic.asm", 4, 0x2000)
-  const sonicDat  = fs.readFileSync(path.join(veratestDir, "sonic.dat"))
-
-  // 2. Compile Applesoft BASIC Startup Menu
-  const startup = compileApplesoftBasic(veratestDir, "startup.bas")
-
-  // 3. Write all files into ProDOS image
-  addFile("SPRITE.BIN",   0x06, 0x2000, sprite2)
-  addFile("SPRITE4.BIN",  0x06, 0x2000, sprite4)
-  addFile("SPRSND.BIN",   0x06, 0x2000, spritesnd2)
-  addFile("SPRSND4.BIN",  0x06, 0x2000, spritesnd4)
-  addFile("MODE7.BIN",    0x06, 0x2000, mode72)
-  addFile("MODE74.BIN",   0x06, 0x2000, mode74)
-  addFile("TILEMAP.BIN",  0x06, 0x2000, mode42)
-  addFile("TILEMAP4.BIN", 0x06, 0x2000, mode44)
-  addFile("LAYER.BIN",    0x06, 0x2000, layer2)
-  addFile("LAYER4.BIN",   0x06, 0x2000, layer4)
-  addFile("MATRIX.BIN",   0x06, 0x2000, matrix2)
-  addFile("MATRIX4.BIN",  0x06, 0x2000, matrix4)
-  addFile("SONIC.BIN",    0x06, 0x2000, sonic2)
-  addFile("SONIC4.BIN",   0x06, 0x2000, sonic4)
-  addFile("SONIC.DAT",    0x00, 0x0000, sonicDat)
-  addFile("STARTUP",      0xFC, 0x0801, startup)
-
-  disk[2 * 512 + 0x25] = fileCount & 0xFF
-  disk[2 * 512 + 0x26] = (fileCount >> 8) & 0xFF
-
-  const outPathRoot = path.join(projectRoot, "veratest.po")
-  const written = safeWriteFileSync(outPathRoot, disk)
-  if (written) {
-    console.log(`\nSuccessfully created 100% genuine ProDOS VERA test disk: ${outPathRoot} (${disk.length} bytes)`)
-  }
-  console.log(`Total Active Files: ${fileCount}`)
-  console.log(`  - SPRITE.BIN / 4   Size=${sprite2.length} bytes (16-Sprite Bouncing)`)
-  console.log(`  - SPRSND.BIN / 4   Size=${spritesnd2.length} bytes (4-Voice Stereo PSG Chiptune)`)
-  console.log(`  - MODE7.BIN / 4    Size=${mode72.length} bytes (Instant RLE Rainbow Arc)`)
-  console.log(`  - TILEMAP.BIN / 4  Size=${mode42.length} bytes (Mode 4 256-Color RPG Tilemap)`)
-  console.log(`  - LAYER.BIN / 4    Size=${layer2.length} bytes (Dual-Layer Electric Storm)`)
-  console.log(`  - MATRIX.BIN / 4   Size=${matrix2.length} bytes (Matrix Digital Rain)`)
-  console.log(`  - SONIC.BIN / 4    Size=${sonic2.length} bytes (Sonic Green Hill Zone)`)
-  console.log(`  - SONIC.DAT        Size=${sonicDat.length} bytes (Sonic Data Assets & PSG Music)`)
-  console.log(`  - STARTUP          Size=${startup.length} bytes (Applesoft BASIC Menu)`)
-
-  // 4. Generate veratest.png preview screenshot
   generatePreviewPng(projectRoot)
 }
 

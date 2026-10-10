@@ -1,6 +1,6 @@
 # Apple II VERA Development — Master Session Summary & Architecture Guide
 
-**Session Date**: 2026-09-05 ~ 2026-09-12  
+**Session Date**: 2026-09-05 ~ 2026-10-11
 **Target Environments**: Real Apple II (+64KB / //e / IIgs / Laser 128), [Apple2TS](https://apple2ts.com) Web Emulator, and [AppleWin](https://github.com/anomixer/AppleWin) Emulator  
 **Hardware Interface**: VERA (Versatile Embedded Retro Adapter) FPGA Card on **Slot 2** (`$C0A0` / `$C200`) or **Slot 4** (`$C0C0` / `$C400`)  
 **Active Projects Covered**:
@@ -39,7 +39,7 @@
     - [3.3 7-in-1 Flagship Test Suite (`veratest.po`, 140KB Floppy)](#33-7-in-1-flagship-test-suite-veratestpo-140kb-floppy)
     - [3.4 32MB Fullscreen 375-Image Slideshow Engine (`slideshow.hdv`)](#34-32mb-fullscreen-375-image-slideshow-engine-slideshowhdv)
       - [3.4.1 File System Structure](#341-file-system-structure)
-      - [3.4.2 Direct Block MLI ($80) Streaming Architecture](#342-direct-block-mli-80-streaming-architecture)
+      - [3.4.2 File-Level Image Streaming Architecture](#342-file-level-image-streaming-architecture)
       - [3.4.3 Interactive Controls & Dual Status Display](#343-interactive-controls--dual-status-display)
       - [3.4.4 Direct Mode 7 Bitmap OSD Overlay & Zero-Artifact Palette LUTs](#344-direct-mode-7-bitmap-osd-overlay--zero-artifact-palette-luts)
       - [3.4.5 Space-Free Corner Badges & Pure Image MUTE Mode](#345-space-free-corner-badges--pure-image-mute-mode)
@@ -48,7 +48,7 @@
       - [3.4.8 Acoustic Balancing for PSG Audio (`CANYON.ZSM`)](#348-acoustic-balancing-for-psg-audio-canyonzsm)
       - [3.4.9 5-Second Auto-Start Countdown in `startup.bas`](#349-5-second-auto-start-countdown-in-startupbas)
     - [3.5 3-Track X16 ZSM PSG Audio Streaming System](#35-3-track-x16-zsm-psg-audio-streaming-system)
-    - [3.6 Standalone Zero-Dependency Build Architecture](#36-standalone-zero-dependency-build-architecture)
+    - [3.6 Standalone Build Architecture](#36-standalone-build-architecture)
     - [3.7 Apple2TS & AppleWin Integration](#37-apple2ts--applewin-integration)
     - [3.8 Git Commit History (`veratest`)](#38-git-commit-history-veratest)
   - [4. Project 3: VERA Music Engine & Jukebox (`c:\dev\veramusic`, `veramusic`)](#4-project-3-vera-music-engine--jukebox-cdevveramusic-veramusic)
@@ -87,11 +87,11 @@
 | Repository | Path | Current Branch | HEAD Commit | Working Tree | Distribution Artifacts |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **TimePilot-IIvera** | `c:\dev\Time-Pilot\TimePilot-IIvera` | `master` (synced with `fork/master`) | `9548e85` (1 commit ahead of `origin/master`) | Clean | `TimePilot-IIvera.hdv` (800KB), `TimePilot-IIvera-D1.po` (140KB), `TimePilot-IIvera-D2.po` (140KB) |
-| **veratest** | `c:\dev\veratest` | `main` (synced with `origin/main`) | `5216fe1` (Tag `v0.0.3`) | Clean | `veratest.po` (140KB), `veratest.png`, `slideshow.hdv` (32MB), `slideshow.png` |
+| **veratest** | `c:\dev\veratest` | `main` (1 commit ahead of `origin/main`) | `e78c441` (Tag `v0.0.3` is earlier) | Modified: Cadius packaging and file-level asset updates | `veratest.po` (140KB), `veratest.png`, `slideshow.hdv` (32MB), `slideshow.png` |
 | **veramusic** | `c:\dev\veramusic` (`c:\dev\veramus`) | `master` (synced with `origin/master`) | `56bc9c0` (1 squashed commit) | Clean | `jukebox.po` (140KB), `jukebox.hdv` (32MB), `psgvram.bin`, `psgstream.bin`, `psgplay.bin`, `pcmstream.bin` |
 | **verasdedit** | `c:\dev\verasdedit` | `master` (synced with `origin/master`) | `14eed58` | Clean | `verasdedit.po` (140KB bootable floppy), `VERASDEDIT.BIN` (3.5KB, load `$2000`) |
 
-All four repositories are completely tested, committed, synchronized with their respective remotes, and ready for deployment.
+The three other repositories retain the status recorded below. `veratest` has a tested Cadius packaging update in progress; its latest build outputs pass Cadius volume checks.
 
 ---
 
@@ -379,7 +379,7 @@ cac3041 audio: Restore authentic Konami Stage Clear Ah~~~ vocal fanfare and opti
 
 Key features and deliverables in Release v0.0.3:
 1. **7-in-1 Flagship Test Suite (`veratest.po`, 140KB bootable floppy)**: Complete hardware exercise across sprites, 4-voice polyphonic PSG sound, Mode 7 256-color RLE decoding, Mode 4 RPG tilemap with smooth wander camera, dual-layer parallax plasma starfield, The Matrix 256-color text code rain, and the newly added *Sonic The Hedgehog: Green Hill Zone* port.
-2. **32MB Fullscreen 375-Image Slideshow Engine (`slideshow.hdv`)**: Pure 6502 Direct Block MLI (`$80`) streaming engine displaying 375 Mode 7 ($320 \times 240$ 8bpp) images and 375 custom palettes with continuous 60 Hz VERA VSYNC IRQ background music.
+2. **32MB Fullscreen 375-Image Slideshow Engine (`slideshow.hdv`)**: File-level ProDOS streaming engine displaying 375 Mode 7 ($320 \times 240$ 8bpp) images and 375 custom palettes with continuous 60 Hz VERA VSYNC IRQ background music.
 3. **Direct Mode 7 Bitmap On-Screen Display (OSD) Overlay**: High-performance status bar rendered directly into bottom scanlines (Row 29) of Mode 7 VRAM with precomputed zero-noise palette LUTs, sub-13ms image backup/restore, space-free corner badges, and a pure image MUTE mode leaving 232 pixels untouched.
 4. **PSG Shadow Register Engine (`PSG_SHADOW`)**: 64-byte RAM shadow mirror restoring active PSG channel frequencies, waveforms, and stereo pans in under 0.1ms upon unmuting, eliminating pitch bends and screeches.
 5. **Zero-Crash Cold-Boot & Reboot Safety**: Atomic initialization sequence blanking video and muting PSG before disk loading, guaranteeing 100% reliable system reboots without freezing.
@@ -456,8 +456,10 @@ The `STARTUP` script automatically probes Slot 2 (`$C200`) and Slot 4 (`$C400`) 
    - 4-frame animated running Sonic hardware sprite with rolling ground dips (`Y_DIPS`).
    - Real-time animated sunflower tile swapping at VRAM `$0EB80` and 4-color cycling waterfall palette at `$1FA50`.
    - Authentic 16-channel PSG Green Hill Zone soundtrack driven by 60 Hz VERA VSYNC IRQ.
-   - Assets compacted into a contiguous 103-block container (`SONIC.DAT`), streamed via ProDOS MLI in under 1.5 seconds.
-   - Fits on 140KB floppy with 27 free blocks remaining.
+   - Assets compacted into a 103-block `SONIC.DAT` ProDOS file, opened and streamed sequentially with MLI `OPEN`/`READ`/`CLOSE` in 512-byte chunks.
+   - Fits on the 140KB floppy with 29 free blocks remaining in the Cadius-built image.
+
+The current floppy build keeps `PRODOS` and `BASIC.SYSTEM` from the bootable ProDOS baseline, renames the volume `VERATEST`, and uses Cadius to remove the baseline utilities and add the launcher, demo binaries, and `SONIC.DAT`. Cadius writes the ProDOS catalog, file allocation indexes, bitmap, and file dates. Sonic opens `SONIC.DAT` from the active ProDOS prefix; its 103 sequential chunks are offsets within that one ProDOS file, not fixed disk blocks.
 
 #### Complete VRAM & Sprite Attribute Clean Reset (`CLR_64K`)
 - Implemented high-performance 64KB unrolled block wiper (`CLR_64K`) across Bank 0 and Bank 1 in ~0.5s.
@@ -475,21 +477,18 @@ The `STARTUP` script automatically probes Slot 2 (`$C200`) and Slot 4 (`$C400`) 
 
 #### 3.4.1 File System Structure
 The generated `slideshow.hdv` is an authentic 32 MiB ProDOS 2.4.3 volume named `SLIDESHOW`.
-- **Root Directory**: Contains `PRODOS`, `STARTUP`, `SLIDESHOW.BIN`, `SLIDSHW4.BIN`, and `/DATA/`.
-- **Subdirectory `/DATA/`**: Uses blocks 150–207 (58 blocks).
-  - Block 150: Subdirectory header + first 12 file entries.
-  - Blocks 151–207: Remaining entries using strict ProDOS 39-byte directory entries (13 entries per 512-byte block).
-  - Registers all **750 files**: `VPAL001.BIN`..`VPAL375.BIN` (512-byte palettes) and `IMG001.BIN`..`IMG375.BIN` (76,800-byte Mode 7 bitmaps).
-  - Fully compatible with standard ProDOS directory browsers (e.g. `CAT`, `Filer`).
+- **Root Directory**: Contains ProDOS system files, `STARTUP`, `SLIDESHOW.BIN`, `SLIDSHW4.BIN`, and the data directories.
+- **Music directory `/DATA/`**: Contains the three PSG music files.
+- **Image directories `/DATA1/` through `/DATA3/`**: Each contains 125 palette/image pairs, totaling 750 files: `VPAL001.BIN`..`VPAL375.BIN` (512-byte palettes) and `IMG001.BIN`..`IMG375.BIN` (76,800-byte Mode 7 bitmaps).
+- The Cadius build dynamically allocates directory and file blocks and produces catalogs accepted by standard ProDOS tools such as `CAT` and Filer. The loader does not depend on any specific block placement.
 
-#### 3.4.2 Direct Block MLI (`$80`) Streaming Architecture
-For blistering image load times on 8-bit 6502, `slideshow.asm` bypasses the overhead of standard ProDOS pathname parsing:
-- Images are stored contiguously starting at block 6000.
-- Each image occupies a fixed 152-block slot:
-  - 1 palette block (512 bytes $\rightarrow$ VERA Palette RAM `$1FA00`).
-  - 1 image index block.
-  - 150 consecutive bitmap blocks ($150 \times 512 = 76,800$ bytes $\rightarrow$ VRAM `$00000..$12BFF`).
-- Streams blocks directly from the storage controller into VERA VRAM with zero intermediate memory copy buffers.
+#### 3.4.2 File-Level Image Streaming Architecture
+The slideshow locates each image through ProDOS paths and catalog metadata; it does not assume fixed physical blocks or contiguous allocation:
+- Palette files (`VPALnnn.BIN`) are opened and read through ProDOS MLI `OPEN`/`READ` into a 512-byte buffer, then copied to VERA Palette RAM (`$1FA00`).
+- For a large bitmap (`IMGnnn.BIN`), the engine locates its ProDOS directory entry, reads the seedling/sapling index, and obtains the actual allocated data-block numbers.
+- MLI `READ_BLOCK` (`$80`) transfers each resolved file data block directly to VERA VRAM (`$00000..$12BFF`). This avoids loading the 76,800-byte image into Apple II RAM while allowing Cadius or file-copy utilities to place data blocks anywhere.
+- Music files are ordinary ProDOS files opened and read sequentially from `/DATA/`.
+- Prefix-aware path construction supports running the app and data directories from a copied nested directory.
 
 #### 3.4.3 Interactive Controls & Dual Status Display
 - **Keyboard Navigation**:
@@ -521,7 +520,7 @@ For blistering image load times on 8-bit 6502, `slideshow.asm` bypasses the over
 
 #### 3.4.7 Cold-Boot & Clean Reboot Initialization
 - **Reboot Freeze Elimination**: Entry routine (`START`) blanks VERA video (`VERA_DC_VID = 0`), silences all 16 PSG channels, clears shadows, streams image 1, and only then atomically enables video output (`VERA_DC_VID = $11`) and starts the 60 Hz music IRQ.
-- **Continuous 60 Hz Audio**: Music streaming continues without pauses or tempo hesitation across background image disk transfers.
+- **Continuous 60 Hz Audio**: Music streaming continues without pauses or tempo hesitation while file-allocated image blocks are transferred.
 
 #### 3.4.8 Acoustic Balancing for PSG Audio (`CANYON.ZSM`)
 - Scaled noise percussion to 55% and boosted melodic voices to 130% in `slideshow_hdv.mjs`, producing a balanced, punchy acoustic mix.
@@ -534,19 +533,20 @@ For blistering image load times on 8-bit 6502, `slideshow.asm` bypasses the over
 ### 3.5 3-Track X16 ZSM PSG Audio Streaming System
 Three Commander X16 ZSM soundtracks (`SB-INTRO`, `CANYON`, and `GREENHILL`) were parsed and converted at build time into pure VERA PSG streams:
 - Stripped FM/YM2151 commands, preserving all 16-channel PSG voice registers, pan, frequency, volume, and waveform settings.
-- Stored in fixed 600-block slots starting at HDV block 800.
+- Stored as ordinary ProDOS files under `/DATA/`; Cadius allocates their storage dynamically.
 - Streamed through a compact 512-byte buffer at `$4000`.
 - Driven by the **VERA VSYNC IRQ at 60 Hz**:
-  - Music playback continues uninterrupted during Direct Block MLI disk streaming without tempo hesitation.
+  - Music playback continues uninterrupted during file-allocated image streaming without tempo hesitation.
   - VERA address registers (`VERA_ADDR_L/M/H`) are strictly saved and restored around each IRQ tick to prevent corruption of the active image loading stride.
   - Switching tracks or exiting automatically clears all 16 PSG channels.
 
 ---
 
-### 3.6 Standalone Zero-Dependency Build Architecture
-The `veratest` build system requires no external assembler or tool installations beyond Node.js:
+### 3.6 Standalone Build Architecture
+The build uses Node.js, the bundled Cadius executable (`tools/cadius.exe`), and no external assembler:
 - `src/asm6502.mjs`: High-performance two-pass 6502 assembler. Correctly evaluates labels, equates, zero page vs absolute addressing, and injects slot base constants (`VERA_BASE = $C200` or `$C400`).
 - `src/applebasic.mjs` & `src/applebasic.inc`: Applesoft BASIC compiler that directly parses plain-text `startup.bas` into native Apple II binary memory-linked token streams (`NextPtr[2] + LineNo[2] + Tokens + 0x00`).
+- `src/veratest/veratest.mjs` and `src/slideshow/slideshow_hdv.mjs`: Both package ProDOS images with Cadius. Set `CADIUS` to override the bundled executable.
 - `build.bat`:
   ```cmd
   build.bat veratest    :: Builds veratest.po & veratest.png
@@ -564,13 +564,16 @@ The `veratest` build system requires no external assembler or tool installations
 
 ### 3.8 Git Commit History (`veratest`)
 ```text
-5216fe1 (HEAD -> main, origin/main, tag: v0.0.3) feat(v0.0.3): 7-in-1 VERA flagship showcase & 32MB slideshow for Apple2TS and AppleWin
+e78c441 (HEAD -> main) Support file-level slideshow installs
+5216fe1 (tag: v0.0.3) feat(v0.0.3): 7-in-1 VERA flagship showcase & 32MB slideshow for Apple2TS and AppleWin
 d248872 feat(v0.0.2): 6-in-1 flagship showcases, 32MB 375-image fullscreen slideshow engine, and zero-dependency build system
 98304c0 Refactor build system into modular 6502 assembly and Applesoft BASIC architecture
 8a2d040 docs: add AGENTS.md development and architecture guide
 056478e (chore)README
 e259417 Add acknowledgements and credits section to README
 ```
+
+The current uncommitted update converts the 140KB floppy packager to Cadius, bundles `tools/cadius.exe` for both image builds, and switches Sonic asset loading to ProDOS `OPEN`/`READ`/`CLOSE`. Both generated images passed Cadius `CHECKVOLUME`; the user also confirmed the build works.
 
 ---
 
@@ -945,7 +948,7 @@ The repository is completely standalone and requires only Node.js (ESM):
 | **Sonic Green Hill Zone Port** | `SONIC.BIN` / `SONIC4.BIN` | Apple2TS & AppleWin | Dual-layer parallax, 4-frame sprite, rolling ground dips, sunflower swapping, 60Hz PSG | **PASS** |
 | **Complete VRAM & Ghost Sprite Reset** | `SPROUT.BIN` / `SPRSND.BIN` | Apple2TS & AppleWin | `CLR_64K` clears all 128 sprite attribute slots and 128KB VRAM; zero ghost sprites | **PASS** |
 | **Native Display Return on Exit** | All Showcases (veratest) | AppleWin & Apple2TS | `VERA_DC_VID = 0` instantly restores Apple II text screen on single-monitor setups | **PASS** |
-| **32MB Direct Block MLI** | `slideshow.hdv` | Apple2TS & AppleWin | 375 images load via MLI $80; continuous 60 Hz VSYNC PSG music plays with zero jitter | **PASS** |
+| **32MB File-Level Image Streaming** | `slideshow.hdv` | Apple2TS & AppleWin | 375 images load from ProDOS catalog/index-resolved allocations via MLI $80; no fixed block assumptions; continuous 60 Hz VSYNC PSG | **PASS** |
 | **Mode 7 Direct Bitmap OSD Overlay** | `slideshow.asm` | Apple2TS & AppleWin | Row 29 corner badges render with precomputed LUTs; 0% palette overwriting | **PASS** |
 | **Pure Image MUTE Mode** | `slideshow.asm` | Apple2TS & AppleWin | Mute suppresses left badge; 232 pixels wide (72.5% of screen) pristine untouched art | **PASS** |
 | **PSG Shadow Unmute Engine** | `slideshow.asm` | Apple2TS & AppleWin | Unmute restores 16 voices in <0.1ms without pitch bends or screeching | **PASS** |
@@ -972,11 +975,11 @@ The repository is completely standalone and requires only Node.js (ESM):
 
 ## 7. Baseline State for Starting a New Session
 
-When starting a new session, the development environment is in a completely stable, clean state:
+Historical environment snapshot from the September 2026 session; the `veratest` row below is superseded by its current October 11, 2026 state.
 
 1. **All Four Repositories Synchronized**:
    - `c:\dev\Time-Pilot\TimePilot-IIvera`: Commit `a7fa28c` (Tag `v1.9-iivera`, 1 commit ahead of upstream `0870564`), working tree clean.
-   - `c:\dev\veratest`: Commit `0e493f7` on `main`, working tree clean.
+   - `c:\dev\veratest`: Branch `main`, HEAD `e78c441` (`Support file-level slideshow installs`), one commit ahead of `origin/main`; current Cadius/file-level update is uncommitted. `build.bat all` succeeds and both images pass Cadius volume checks.
    - `c:\dev\veramusic` (`c:\dev\veramus`): Commit `56bc9c0` on `master` (synced with `origin/master`), working tree clean.
    - `c:\dev\verasdedit`: Commit `14eed58` on `master` (synced with `origin/master`), working tree clean.
 2. **Build Outputs Generated & Verified**:
@@ -984,9 +987,9 @@ When starting a new session, the development environment is in a completely stab
    - `TimePilot-IIvera-D1.po` (140KB bootable floppy Disk 1 ready to run)
    - `TimePilot-IIvera-D2.po` (140KB bootable floppy Disk 2 ready to run)
    - `TimePilot-IIvera-v1.9.zip` (230KB all-in-one distribution archive)
-   - `veratest.po` (140KB bootable floppy image ready to run)
+   - `veratest.po` (140KB Cadius-built bootable floppy image; current build checked)
    - `veratest.png` (560x384 preview screenshot for Apple2TS Disk Collection)
-   - `slideshow.hdv` (32MB bootable hard disk image ready to run)
+   - `slideshow.hdv` (32MB Cadius-built bootable hard disk image; current build checked)
    - `slideshow.png` (560x384 preview screenshot for Slideshow Showcase)
    - `jukebox.po` (140KB bootable floppy image with VERA SRAM pre-load player)
    - `jukebox.hdv` (32MB bootable hard disk image with full 5-track lineup)
@@ -999,10 +1002,10 @@ When starting a new session, the development environment is in a completely stab
 3. **Documentation Current**:
    - `Time-Pilot\TimePilot-IIvera\README.md` (Bilingual English & Traditional Chinese, CMake + Python pipeline)
    - `Time-Pilot\TimePilot-IIvera\AGENTS.md` (Updated with CMake pipeline, memory map, and ProDOS gotchas)
-   - `veratest\README.md` & `veratest\AGENTS.md` (Complete architectural, hardware & build reference through Release v0.0.3)
+   - `veratest\README.md`, `veratest\AGENTS.md`, and `veratest\docs\vera-session.md` (updated for Cadius packaging and file-level ProDOS access)
    - `veramusic\README.md` & `veramusic\AGENTS.md` (Complete audio synthesis, streaming, and player reference through Milestone 22)
    - `verasdedit\AGENTS.md` (Complete 6502 hex editor architecture and VERA SD SPI debugging lessons)
-   - `c:\dev\veratest\docs\vera-session.md` (This master document, updated through September 12, 2026)
+   - `c:\dev\veratest\docs\vera-session.md` (This master document; current veratest status updated through October 11, 2026)
 
 
 
