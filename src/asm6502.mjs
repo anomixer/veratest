@@ -245,12 +245,24 @@ export const assemble6502 = (lines, startAddress = 0x2000, extraLabels = {}) => 
 
     if (instr === "CMP") {
       if (operand.startsWith("#")) return [0xC9, resolveVal(operand)]
+      if (operand.endsWith(",X")) {
+        const val = resolveVal(operand.replace(",X", ""))
+        return [0xDD, val & 0xFF, (val >> 8) & 0xFF]
+      }
       const val = resolveVal(operand)
       return [0xCD, val & 0xFF, (val >> 8) & 0xFF]
     }
 
-    if (instr === "CPX") return [0xE0, resolveVal(operand)]
-    if (instr === "CPY") return [0xC0, resolveVal(operand)]
+    if (instr === "CPX") {
+      if (operand.startsWith("#")) return [0xE0, resolveVal(operand)]
+      const val = resolveVal(operand)
+      return [0xEC, val & 0xFF, (val >> 8) & 0xFF]
+    }
+    if (instr === "CPY") {
+      if (operand.startsWith("#")) return [0xC0, resolveVal(operand)]
+      const val = resolveVal(operand)
+      return [0xCC, val & 0xFF, (val >> 8) & 0xFF]
+    }
 
     if (["BNE", "BEQ", "BPL", "BMI", "BCC", "BCS", "BVC", "BVS"].includes(instr)) {
       const opcodes = { BNE: 0xD0, BEQ: 0xF0, BPL: 0x10, BMI: 0x30, BCC: 0x90, BCS: 0xB0, BVC: 0x50, BVS: 0x70 }

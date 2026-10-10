@@ -52,8 +52,8 @@ for (let i = 0; i < paletteWords.length; i++) {
   palBuf[i * 2 + 1] = r
 }
 
-// 3. Load PSG Music Stream from verified greenhill_embedded.bin
-const greenhillPath = path.resolve(__dirname, "..", "slideshow", "data", "greenhill_embedded.bin")
+// 3. Load the generated, block-padded PSG stream shared with the slideshow.
+const greenhillPath = path.resolve(__dirname, "..", "slideshow", "data", "greenhill.psg")
 if (!fs.existsSync(greenhillPath)) {
   throw new Error(`Verified Green Hill PSG stream not found at ${greenhillPath}!`)
 }

@@ -44,9 +44,9 @@ Fully compatible with [AppleWin](https://github.com/anomixer/AppleWin) (with VER
 
 ---
 
-## 🛠️ Zero-Dependency Modular Build System
+## 🛠️ Modular Build System
 
-This repository contains a self-contained, zero-dependency Node.js toolchain that compiles both 6502 assembly and Applesoft BASIC directly from plain-text source files:
+The Node.js toolchain compiles 6502 assembly and Applesoft BASIC from source. Building the slideshow HDV also requires Cadius (`cadius.exe`) available on `PATH`; set the `CADIUS` environment variable to its full path if needed.
 
 ```bash
 # 1. Build standard 140KB bootable ProDOS floppy disk (veratest.po & veratest.png)
@@ -89,17 +89,20 @@ build.bat all
 
 ### ProDOS Slideshow Disk Layout
 
-`slideshow.hdv` is a bootable 32 MiB ProDOS 2.4.3 volume named `SLIDESHOW`. Its root directory contains the system files, `STARTUP`, the Slot 2 and Slot 4 slideshow binaries, and a standard `/DATA/` subdirectory. `/DATA/` registers all 750 assets as ordinary ProDOS files:
+`slideshow.hdv` is a bootable 32 MiB ProDOS 2.4.3 volume named `SLIDESHOW`. Its root directory contains the system files, `STARTUP`, the Slot 2 and Slot 4 slideshow binaries, a `/DATA/` music directory, and three image directories. The image files are split into groups of 125 so each catalog stays manageable for Copy II Plus:
 
 ```text
-/SLIDESHOW/DATA/
-  VPAL001.BIN ... VPAL375.BIN   512-byte palettes
-  IMG001.BIN  ... IMG375.BIN    76,800-byte Mode 7 bitmaps
+/SLIDESHOW/DATA/                 three PSG music files
+/SLIDESHOW/DATA1/                VPAL001.BIN ... VPAL125.BIN and IMG001.BIN ... IMG125.BIN
+/SLIDESHOW/DATA2/                VPAL126.BIN ... VPAL250.BIN and IMG126.BIN ... IMG250.BIN
+/SLIDESHOW/DATA3/                VPAL251.BIN ... VPAL375.BIN and IMG251.BIN ... IMG375.BIN
 ```
 
-The directory occupies blocks 150–207 (58 blocks), with a correctly aligned subdirectory header and multi-block directory entries. For fast playback, each image slot is also laid out contiguously from block 6000: one palette block, one image index block, and 150 bitmap blocks. The 6502 engine uses Direct Block MLI `$80` to read that layout directly into VERA VRAM; it does not depend on pathname parsing during playback.
+The slideshow selects `/DATA1`, `/DATA2`, or `/DATA3` from the image number, locates each image and palette in that ProDOS catalog, reads the file's seedling/sapling allocation metadata, then streams its allocated blocks with MLI `READ_BLOCK` directly to VERA. It does not assume image blocks are contiguous or load a 76,800-byte image into Apple II RAM. Music files use MLI `OPEN`/`READ` from `/DATA`. Cadius allocates file blocks dynamically, so asset placement is not tied to fixed HDV blocks. The generated ProDOS 8 subdirectory headers are adjusted to use the `$75` compatibility marker required by ProDOS 8.
 
-Three original X16 ZSM soundtracks (`SB-INTRO`, `CANYON`, and `GREENHILL`) are bundled and converted during the build into VERA PSG streams, in that order. Fixed 600-block music slots begin at block 800 and are streamed through a 512-byte buffer at `$4000`, while the 375-image area begins at block 6000. YM2151 FM commands are skipped because the Apple2TS VERA platform exposes the VERA PSG instead. Music starts with the slideshow and advances from the VERA VSYNC IRQ, so image loading does not alter its tempo; `M` toggles mute/playback, `N` selects the next soundtrack, and each song automatically advances to the next one at EOF (or a random soundtrack in Random mode). Switching tracks clears the PSG first to prevent residual notes.
+For file-level installation on another ProDOS volume, copy the slideshow files and all four directories (`DATA`, `DATA1`, `DATA2`, and `DATA3`) together. The loader follows the active ProDOS prefix, so the app can run from a nested directory such as `/VERASD/SLIDESHOW/`.
+
+Three original X16 ZSM soundtracks (`SB-INTRO`, `CANYON`, and `GREENHILL`) are bundled and converted during the build into VERA PSG streams, in that order. The streams are stored as files under `/DATA`. YM2151 FM commands are skipped because the Apple2TS VERA platform exposes the VERA PSG instead. Music starts with the slideshow and advances from the VERA VSYNC IRQ, so image loading does not alter its tempo; `M` toggles mute/playback, `N` selects the next soundtrack, and each song automatically advances to the next one at EOF (or a random soundtrack in Random mode). Switching tracks clears the PSG first to prevent residual notes.
 
 The source archive also contains other ZSM files, but they are not packaged because they are FM-only or not reliably audible through the Apple II VERA PSG path. The Apple II playlist intentionally keeps the three tested PSG tracks above.
 

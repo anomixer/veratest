@@ -1,6 +1,6 @@
 ; ==============================================================================
 ; 256-Color Fullscreen Slideshow Engine for Apple II (VERA Card + ProDOS)
-; High-Speed Direct Block MLI ($80) Streaming Engine: 0% Path Error, 0% Buffer Error
+; ProDOS MLI direct-block streaming engine for image assets; file MLI for music
 ; Supports: 375 320x240 8bpp Bitmaps + 375 Custom Palettes + 8 PSG soundtracks
 ; Controls: Space/Right=Next, Left=Prev, A=Auto, R=Random, M=Mute, ESC=Exit
 ; ==============================================================================
@@ -8,7 +8,6 @@
 * = $2000
 
 MLI         = $BF00
-PRODOS_UNIT = $BF30     ; ProDOS Global Page: Boot device unit number
 
 CURRENT_IMG = $06       ; Current Image Index low byte (1..375)
 CURRENT_IMG_H = $1C     ; High byte of current image index
@@ -18,8 +17,6 @@ TIMER_L     = $09       ; Auto-play countdown timer
 TIMER_H     = $0A
 RAND_SEED   = $0B
 RAND_SEED_H = $1D
-CURR_BLK_L  = $0C       ; 16-bit current block pointer
-CURR_BLK_H  = $0D
 BLOCK_COUNT = $0E       ; 150 blocks loop counter
 MUSIC_PTR_L = $0F
 MUSIC_PTR_H = $10
@@ -43,11 +40,31 @@ OSD_FONT_BYTE   = $25
 OSD_ROW_IDX     = $26
 OSD_COL_IDX     = $27
 LEFT_BADGE_END  = $28       ; Dynamic end column for left badge (13..16)
+PATH_SRC_PTR_L  = $30
+PATH_SRC_PTR_H  = $31
+PATH_SRC_IDX    = $32
+PATH_CHAR       = $33
+DIR_PTR         = $34       ; Zero-page pointer for ProDOS directory entries
 
 DATA_BUF    = $3800     ; 512-Byte ProDOS Block Buffer ($3800 ~ $39FF)
+PATH_BUF    = $5A00     ; 64-byte ProDOS pathname buffer
+FILE_IO_BUF = $6000     ; 1 KB page-aligned ProDOS OPEN buffer
+INDEX_BUF   = $5B00     ; Copy of an image's 512-byte sapling index block
 
 START:
+    ; BRUN has no caller state to return to, so STARTUP loads this binary and
+    ; CALLs $2000. Preserve Applesoft's zero page for a clean RTS back to BASIC.
+    LDX #$3F
+SAVE_BASIC_ZP:
+    LDA $00,X
+    STA BASIC_ZP_SAVE,X
+    DEX
+    BPL SAVE_BASIC_ZP
+
     ; 1. Hardware IRQ Safety & Video Blanking
+    ; BRUN from BASIC may leave the 6502 decimal flag set. Address arithmetic
+    ; in directory scanning (ADC #39) and music/file code must be binary.
+    CLD
     SEI
     LDA #$00
     STA VERA_IEN          ; Disable VERA interrupts immediately
@@ -89,10 +106,13 @@ START:
     LDA #$37
     STA RAND_SEED_H
 
-    ; Copy Boot Drive Unit Number from ProDOS Global Page $BF30
-    LDA PRODOS_UNIT
-    STA MLI_UNIT_NUM
-    STA CANYON_UNIT_NUM
+    LDA #$00
+    STA MUSIC_FILE_OPEN
+    STA MUSIC_REFILL_PENDING
+    STA MUSIC_CHANGE_PENDING
+    STA MUSIC_WAITING
+    STA MUSIC_PREFETCH_DONE
+    STA MUSIC_HOLD
 
     ; 5. Configure Layer 0: Bitmap Mode (Color depth 8bpp = 3, Bitmap Mode = 1 << 2 = 4) -> $07
     LDA #$07
@@ -108,6 +128,9 @@ START:
     STA VERA_L1_CFG
 
     ; 6. Load and initialize the converted Canyon PSG stream
+    ; ProDOS file drivers may use IRQs while resolving paths and reading blocks.
+    ; VERA IRQ sources are still disabled here; enable CPU IRQ handling for MLI.
+    CLI
     JSR INIT_CANYON_MUSIC
     JSR LOAD_CANYON_MUSIC
     JSR UPDATE_MUSIC_NAME
@@ -126,6 +149,7 @@ START:
     JSR ENABLE_MUSIC_IRQ
 
 MAIN_LOOP:
+    JSR SERVICE_MUSIC_REQUESTS
     LDA OSD_DIRTY
     BEQ CHK_KEY
     LDA #$00
@@ -228,11 +252,47 @@ GOTO_PREV_JMP:
 DO_EXIT:
     ; Clean up and return to ProDOS BASIC
     JSR DISABLE_MUSIC_IRQ
+    JSR CLOSE_MUSIC_FILE
     JSR SILENCE_PSG
     LDA #$00
     STA VERA_DC_VID     ; Disable VERA display
+    ; Our zero-page scratch variables overlap the Apple II ROM's text-window
+    ; state ($20-$29). Restore a normal 40-column window before calling HOME.
+    STA $20               ; WNDLFT
+    STA $22               ; WNDTOP
+    STA $24               ; CH
+    STA $25               ; CV
+    LDA #$28
+    STA $21               ; WNDWDTH = 40 columns
+    LDA #$18
+    STA $23               ; WNDBTM = 24 rows
+    ; BRUN may leave the Apple II text/graphics soft switches in an unexpected
+    ; state. Restore text mode and clear the screen before ProDOS resumes BASIC.
+    JSR $FB39            ; SETTXT
+    JSR $FC58            ; HOME
+    ; Also clear all text-page bytes in case the ROM's window bookkeeping was
+    ; damaged while the slideshow owned these zero-page locations.
+    LDA #$A0
+    LDX #$00
+EXIT_CLEAR_TEXT:
+    STA $0400,X
+    STA $0500,X
+    STA $0600,X
+    STA $0700,X
+    INX
+    BNE EXIT_CLEAR_TEXT
+    LDA #$00
+    STA $24               ; CH
+    STA $25               ; CV
     LDA #$FF
     STA $F1             ; Full text speed
+    ; Restore Applesoft's zero page after using it as slideshow scratch space.
+    LDX #$3F
+RESTORE_BASIC_ZP:
+    LDA BASIC_ZP_SAVE,X
+    STA $00,X
+    DEX
+    BPL RESTORE_BASIC_ZP
     RTS
 
 TOGGLE_OSD:
@@ -434,74 +494,37 @@ RANDOM_DONE:
     LDA CURRENT_IMG
     RTS
 
-; ==============================================================================
-; Calculate Base Block for Current Image (Base Block = 6000 + (Index - 1) * 152)
-; ==============================================================================
-CALC_IMAGE_BLOCKS:
-    ; 6000 = $1770
-    ; (Index - 1) * 152, using a 16-bit image index
-    LDA CURRENT_IMG
-    SEC
-    SBC #$01            ; 0-indexed: 0..74
-    STA MULT_TEMP
-    LDA CURRENT_IMG_H
-    SBC #$00
-    STA MULT_TEMP_H
-
-    ; Low/High calculation of 1300 + (A * 152)
-    LDA #$70
-    STA CURR_BLK_L
-    LDA #$17
-    STA CURR_BLK_H
-
-    LDA MULT_TEMP
-    ORA MULT_TEMP_H
-    BEQ CALC_DONE
-
-    ; Multiply A by 152 and add to CURR_BLK
-ADD_152_LOOP:
-    CLC
-    LDA CURR_BLK_L
-    ADC #152
-    STA CURR_BLK_L
-    LDA CURR_BLK_H
-    ADC #$00
-    STA CURR_BLK_H
-    LDA MULT_TEMP
-    BNE ADD_152_DEC_LOW
-    DEC MULT_TEMP_H
-ADD_152_DEC_LOW:
-    DEC MULT_TEMP
-    LDA MULT_TEMP
-    ORA MULT_TEMP_H
-    BNE ADD_152_LOOP
-
-CALC_DONE:
-    RTS
-
 MULT_TEMP:
     !byte $00
 MULT_TEMP_H:
     !byte $00
 
 ; ==============================================================================
-; Direct Block MLI Streaming Engine: Palette (1 Block) + Image (150 Blocks)
+; ProDOS file streaming: one palette file plus 150 image data blocks
 ; ==============================================================================
 LOAD_IMAGE_AND_PALETTE:
-    JSR CALC_IMAGE_BLOCKS
-
-    ; 1. Read Palette Block (CURR_BLK) into DATA_BUF ($3800)
-    LDA CURR_BLK_L
-    STA MLI_BLK_NUM
-    LDA CURR_BLK_H
-    STA MLI_BLK_NUM+1
-
-    SEI
-    JSR READ_BLOCK_MLI
-    CLI
+    ; Palette files are only 512 bytes: use ProDOS OPEN/READ directly.
+    LDA #$01
+    STA PAL_STAGE
+    LDA #$00
+    STA FILE_KIND
+    JSR OPEN_SELECTED_FILE
+    BCC PAL_OPEN_OK
+    JMP READ_PAL_FAIL
+PAL_OPEN_OK:
+    LDA #$02
+    STA PAL_STAGE
+    LDA #<DATA_BUF
+    STA FILE_BUF_PTR
+    LDA #>DATA_BUF
+    STA FILE_BUF_PTR+1
+    JSR READ_IMAGE_BLOCK
     BCC PAL_READ_OK
     JMP READ_PAL_FAIL
 PAL_READ_OK:
+    LDA #$03
+    STA PAL_STAGE
+    JSR CLOSE_IMAGE_FILE
     ; Lookup optimal FG (white) and BG (black) for this image from precomputed LUT
     LDA CURRENT_IMG_H
     BEQ GET_LUT_LO
@@ -541,14 +564,13 @@ CP_PAL_P2:
     INY
     BNE CP_PAL_P2
 
-    ; 2. Advance to Image Bitmap Start Block (CURR_BLK + 2, skipping Index Block)
-    CLC
-    LDA CURR_BLK_L
-    ADC #$02
-    STA CURR_BLK_L
-    LDA CURR_BLK_H
-    ADC #$00
-    STA CURR_BLK_H
+    ; Resolve IMGnnn.BIN and load its sapling index block.
+    LDA #$01
+    STA FILE_KIND
+    JSR PREPARE_DIRECT_FILE
+    BCC IMAGE_OPEN_OK
+    JMP READ_IMG_OPEN_FAIL
+IMAGE_OPEN_OK:
 
     ; Set VRAM Address to $00000, Stride +1, Bank 0
     LDA #$00
@@ -561,22 +583,46 @@ CP_PAL_P2:
     ; Stream 150 consecutive Blocks (76,800 bytes) directly to VERA
     LDA #150
     STA BLOCK_COUNT
+    LDA #$00
+    STA IMAGE_BLOCK_INDEX
     LDA #<$5000
     STA SAVE_PTR
     LDA #>$5000
     STA SAVE_PTR+1
 
 STREAM_150_BLOCKS:
-    LDA CURR_BLK_L
-    STA MLI_BLK_NUM
-    LDA CURR_BLK_H
-    STA MLI_BLK_NUM+1
-
-    ; Do not enter the ProDOS MLI while the music IRQ is enabled.
-    SEI
-    JSR READ_BLOCK_MLI
-    CLI
-    BCS READ_IMG_FAIL
+    ; Resolve this data block through the sapling index (150 entries).
+    LDX IMAGE_BLOCK_INDEX
+    LDA INDEX_BUF,X
+    STA MLI_BLOCK
+    LDA INDEX_BUF+$100,X
+    STA MLI_BLOCK+1
+    ; ProDOS sparse files use index value $0000 for an all-zero data block.
+    ; Reading physical block 0 here would copy the boot block into the bitmap,
+    ; producing the colored garbage seen in images with blank rows.
+    LDA MLI_BLOCK
+    ORA MLI_BLOCK+1
+    BNE STREAM_READ_IMAGE_BLOCK
+    LDY #$00
+    LDA #$00
+ZERO_SPARSE_BLOCK_LO:
+    STA DATA_BUF,Y
+    INY
+    BNE ZERO_SPARSE_BLOCK_LO
+    LDY #$00
+ZERO_SPARSE_BLOCK_HI:
+    STA DATA_BUF+$100,Y
+    INY
+    BNE ZERO_SPARSE_BLOCK_HI
+    JMP IMAGE_BLOCK_OK
+STREAM_READ_IMAGE_BLOCK:
+    JSR READ_PRODOS_BLOCK
+    BCC IMAGE_BLOCK_OK
+    JMP READ_IMG_FAIL
+IMAGE_BLOCK_OK:
+    ; Image loading is a long foreground operation. Service any deferred PSG
+    ; disk read between image blocks so audio does not pause for the full image.
+    JSR SERVICE_MUSIC_REQUESTS
 
     ; Check if this is one of the last 5 blocks (BLOCK_COUNT <= 5)
     LDA BLOCK_COUNT
@@ -613,13 +659,9 @@ CP_IMG_P2:
     INY
     BNE CP_IMG_P2
 
-    ; Next Block: CURR_BLK++
-    INC CURR_BLK_L
-    BNE NO_BLK_C_INC
-    INC CURR_BLK_H
-NO_BLK_C_INC:
-
     DEC BLOCK_COUNT
+    INC IMAGE_BLOCK_INDEX
+    LDA BLOCK_COUNT
     BNE STREAM_150_BLOCKS
 
     ; Success! Clear border to black
@@ -633,14 +675,139 @@ LOAD_IMG_NO_OSD:
     RTS
 
 READ_PAL_FAIL:
-    LDA #$01            ; Red border on Palette read fail
-    STA VERA_DC_BOR
-    RTS
+    LDA #$01
+    STA FILE_ERROR_KIND
+    JMP SHOW_FILE_ERROR
 
 READ_IMG_FAIL:
-    LDA #$02            ; Blue border on Image read fail
-    STA VERA_DC_BOR
-    RTS
+READ_IMG_OPEN_FAIL:
+    LDA #$02
+    STA FILE_ERROR_KIND
+    JMP SHOW_FILE_ERROR
+
+SHOW_FILE_ERROR:
+    LDA #$00
+    STA VERA_DC_VID
+    STA $C051
+    STA $C054
+    LDX #$00
+    LDA #$A0
+CLEAR_ERROR_TEXT:
+    STA $0400,X
+    STA $0480,X
+    INX
+    CPX #$50
+    BCC CLEAR_ERROR_TEXT
+    LDA #$C6
+    STA $0400
+    LDA #$C9
+    STA $0401
+    LDA #$CC
+    STA $0402
+    LDA #$C5
+    STA $0403
+    LDA #$A0
+    STA $0404
+    LDA #$C5
+    STA $0405
+    LDA #$D2
+    STA $0406
+    LDA #$D2
+    STA $0407
+    LDA #$CF
+    STA $0408
+    LDA #$D2
+    STA $0409
+    LDA FILE_ERROR_KIND
+    CMP #$01
+    BNE SHOW_IMAGE_ERROR_KIND
+    LDA #$D0
+    BNE SHOW_ERROR_KIND
+SHOW_IMAGE_ERROR_KIND:
+    LDA #$C9
+SHOW_ERROR_KIND:
+    STA $040B
+    LDA #$D0
+    STA $0480
+    LDA #$C1
+    STA $0481
+    LDA #$D4
+    STA $0482
+    LDA #$C8
+    STA $0483
+    LDA #$BA
+    STA $0484
+    LDX #$00
+SHOW_ERROR_PATH:
+    TXA
+    CMP PATH_BUF
+    BCS SHOW_ERROR_DETAILS
+    LDA PATH_BUF+1,X
+    ORA #$80
+    STA $0486,X
+    INX
+    CPX #$22
+    BCC SHOW_ERROR_PATH
+SHOW_ERROR_DETAILS:
+    LDA #$C5
+    STA $0500
+    LDA #$D2
+    STA $0501
+    STA $0502
+    LDA #$BA
+    STA $0503
+    LDA FILE_MLI_STATUS
+    LSR
+    LSR
+    LSR
+    LSR
+    TAX
+    LDA HEX_DIGITS,X
+    STA $0504
+    LDA FILE_MLI_STATUS
+    AND #$0F
+    TAX
+    LDA HEX_DIGITS,X
+    STA $0505
+    ; Show the failing file READ parameter list inline after ERR:xx.
+    LDA #$D2
+    STA $0507
+    LDA #$BA
+    STA $0508
+    LDX #$00
+    STX READ_DIAG_INDEX
+    LDY #$09
+SHOW_READ_DIAG:
+    LDX READ_DIAG_INDEX
+    LDA READ_PARAMS,X
+    STA READ_DIAG_BYTE
+    LSR
+    LSR
+    LSR
+    LSR
+    TAX
+    LDA HEX_DIGITS,X
+    STA $0500,Y
+    INY
+    LDA READ_DIAG_BYTE
+    AND #$0F
+    TAX
+    LDA HEX_DIGITS,X
+    STA $0500,Y
+    INY
+    INC READ_DIAG_INDEX
+    LDA READ_DIAG_INDEX
+    CMP #$08
+    BCC SHOW_READ_DIAG
+    LDA #$D3
+    STA $0519
+    LDA #$BA
+    STA $051A
+    LDX PAL_STAGE
+    LDA HEX_DIGITS,X
+    STA $051B
+SHOW_ERROR_HALT:
+    JMP SHOW_ERROR_HALT
 
 UPDATE_IMAGE_NUMBER:
     ; Apple II text page 1, row 24, right-aligned: "IMG: nnn/375".
@@ -729,41 +896,40 @@ INIT_CANYON_MUSIC:
     RTS
 
 LOAD_CANYON_MUSIC:
+    CLC
+    LDA MUSIC_INDEX
+    ADC #$02
+    STA FILE_KIND
+    JSR OPEN_SELECTED_FILE
+    BCS CANYON_LOAD_FAIL
     LDA #<$4000
     STA CANYON_BUF_PTR
     LDA #>$4000
     STA CANYON_BUF_PTR+1
-    JSR SET_MUSIC_START
-    LDX #$01
-LOAD_CANYON_BLOCK:
-    JSR MLI
-    !byte $80
-    !word CANYON_READ_PARAMS
-    BCC CANYON_LOAD_OK
-    JMP CANYON_LOAD_FAIL
-CANYON_LOAD_OK:
-    INC CANYON_BLK_NUM
-    BNE CANYON_NO_BLK_CARRY
-    INC CANYON_BLK_NUM+1
-CANYON_NO_BLK_CARRY:
+    ; Keep one block buffered. The IRQ requests a foreground refill at the end.
+    LDA #$01
+    STA MUSIC_LOAD_COUNT
+LOAD_CANYON_CHUNK:
+    LDA CANYON_BUF_PTR
+    STA FILE_BUF_PTR
+    LDA CANYON_BUF_PTR+1
+    STA FILE_BUF_PTR+1
+    JSR READ_MUSIC_BLOCK
+    BCS CANYON_LOAD_FAIL
     LDA CANYON_BUF_PTR+1
     CLC
     ADC #$02
     STA CANYON_BUF_PTR+1
-    DEX
-    BNE LOAD_CANYON_BLOCK
+    DEC MUSIC_LOAD_COUNT
+    BNE LOAD_CANYON_CHUNK
     RTS
+
+; Legacy label retained as the common failure exit for the file reader.
 CANYON_LOAD_FAIL:
     LDA #$01
     STA MUSIC_MUTE
-    RTS
-
-SET_MUSIC_START:
-    LDX MUSIC_INDEX
-    LDA MUSIC_START_LO,X
-    STA CANYON_BLK_NUM
-    LDA MUSIC_START_HI,X
-    STA CANYON_BLK_NUM+1
+    LDA #$00
+    STA MUSIC_HOLD
     RTS
 
 MUSIC_NEXT:
@@ -773,8 +939,7 @@ MUSIC_NEXT:
     BCC MUSIC_SELECT
     LDA #$00
     STA MUSIC_INDEX
-    JSR MUSIC_SELECT
-    JMP MUSIC_DECODE
+    JMP MUSIC_SELECT
 
 MUSIC_PREV:
     LDA MUSIC_INDEX
@@ -785,6 +950,9 @@ MUSIC_PREV_DEC:
     DEC MUSIC_INDEX
 
 MUSIC_SELECT:
+    LDA #$01
+    STA MUSIC_HOLD
+    JSR CLOSE_MUSIC_FILE
     ; Reset all voices so the previous soundtrack cannot leave residual notes.
     JSR SILENCE_PSG
     JSR CLEAR_PSG_SHADOW
@@ -794,9 +962,14 @@ MUSIC_SELECT:
     STA MUSIC_PTR_H
     LDA #$00
     STA MUSIC_DELAY
-    JSR SET_MUSIC_START
-    JSR REFILL_CANYON_BUFFER
+    JSR LOAD_CANYON_MUSIC
     JSR UPDATE_MUSIC_NAME
+    LDA #$00
+    STA MUSIC_REFILL_PENDING
+    STA MUSIC_CHANGE_PENDING
+    STA MUSIC_WAITING
+    STA MUSIC_PREFETCH_DONE
+    STA MUSIC_HOLD
     RTS
 
 MUSIC_NEXT_KEY:
@@ -871,13 +1044,61 @@ MUSIC_IRQ_DONE:
     PLA
     RTI
 
+SERVICE_MUSIC_REQUESTS:
+    ; Never call ProDOS MLI from the IRQ handler. During a music file change,
+    ; MUSIC_HOLD keeps the IRQ from touching stream state while MLI is active.
+    ; Music setup also writes VERA registers, so preserve the foreground's
+    ; current VERA address while servicing a request between image blocks.
+    LDA VERA_CTRL
+    STA SERVICE_VERA_CTRL
+    LDA VERA_ADDR_L
+    STA SERVICE_VERA_ADDR_L
+    LDA VERA_ADDR_M
+    STA SERVICE_VERA_ADDR_M
+    LDA VERA_ADDR_H
+    STA SERVICE_VERA_ADDR_H
+    LDA MUSIC_HOLD
+    BNE SERVICE_MUSIC_RESTORE
+    LDA MUSIC_REFILL_PENDING
+    BEQ SERVICE_MUSIC_TRACK
+    JSR REFILL_CANYON_BUFFER
+    JMP SERVICE_MUSIC_RESTORE
+SERVICE_MUSIC_TRACK:
+    LDA MUSIC_CHANGE_PENDING
+    BEQ SERVICE_MUSIC_RESTORE
+    LDA #$00
+    STA MUSIC_CHANGE_PENDING
+    JSR MUSIC_SELECT
+SERVICE_MUSIC_RESTORE:
+    LDA SERVICE_VERA_CTRL
+    STA VERA_CTRL
+    LDA SERVICE_VERA_ADDR_L
+    STA VERA_ADDR_L
+    LDA SERVICE_VERA_ADDR_M
+    STA VERA_ADDR_M
+    LDA SERVICE_VERA_ADDR_H
+    STA VERA_ADDR_H
+    RTS
+
 TICK_MUSIC:
     LDA MUSIC_MUTE
-    BNE MUSIC_TICK_DONE
+    BEQ TICK_MUSIC_NOT_MUTED
+    RTS
+TICK_MUSIC_NOT_MUTED:
+    LDA MUSIC_HOLD
+    BEQ TICK_MUSIC_NOT_HELD
+    RTS
+TICK_MUSIC_NOT_HELD:
+    LDA MUSIC_CHANGE_PENDING
+    BEQ TICK_MUSIC_NOT_CHANGING
+    RTS
+TICK_MUSIC_NOT_CHANGING:
     LDA MUSIC_PTR_H
     CMP #$42
     BCC MUSIC_BUFFER_READY
-    JSR REFILL_CANYON_BUFFER
+    LDA #$01
+    STA MUSIC_REFILL_PENDING
+    RTS
 MUSIC_BUFFER_READY:
     LDA MUSIC_DELAY
     BEQ MUSIC_DECODE
@@ -890,7 +1111,9 @@ MUSIC_DECODE:
     LDA MUSIC_PTR_H
     CMP #$42
     BCC MUSIC_DECODE_READY
-    JSR REFILL_CANYON_BUFFER
+    LDA #$01
+    STA MUSIC_REFILL_PENDING
+    RTS
 MUSIC_DECODE_READY:
     LDY #$00
     LDA (MUSIC_PTR_L),Y
@@ -929,8 +1152,9 @@ MUSIC_RESTART:
     LDA #$00
     STA MUSIC_INDEX
 MUSIC_RESTART_SELECT:
-    JSR MUSIC_SELECT
-    JMP MUSIC_DECODE
+    LDA #$01
+    STA MUSIC_CHANGE_PENDING
+    RTS
 MUSIC_RANDOM_NEXT:
     LDA RAND_SEED
     ASL
@@ -940,8 +1164,9 @@ MUSIC_RANDOM_NEXT:
     CMP #$03
     BEQ MUSIC_RANDOM_NEXT
     STA MUSIC_INDEX
-    JSR MUSIC_SELECT
-    JMP MUSIC_DECODE
+    LDA #$01
+    STA MUSIC_CHANGE_PENDING
+    RTS
 MUSIC_ADVANCE_1:
     INC MUSIC_PTR_L
     BNE MUSIC_PTR_OK
@@ -1001,24 +1226,28 @@ MUSIC_NAME_COPY:
     RTS
 
 REFILL_CANYON_BUFFER:
+    LDA #$01
+    STA MUSIC_HOLD
     LDA #<$4000
     STA CANYON_BUF_PTR
     LDA #>$4000
     STA CANYON_BUF_PTR+1
-    JSR MLI
-    !byte $80
-    !word CANYON_READ_PARAMS
+    LDA #<$4000
+    STA FILE_BUF_PTR
+    LDA #>$4000
+    STA FILE_BUF_PTR+1
+    JSR READ_MUSIC_BLOCK
     BCC REFILL_READ_OK
     JMP CANYON_LOAD_FAIL
 REFILL_READ_OK:
-    INC CANYON_BLK_NUM
-    BNE REFILL_NO_CARRY
-    INC CANYON_BLK_NUM+1
-REFILL_NO_CARRY:
+    LDA #$00
+    STA MUSIC_REFILL_PENDING
+    STA MUSIC_HOLD
     LDA #<$4000
     STA MUSIC_PTR_L
     LDA #>$4000
     STA MUSIC_PTR_H
+    CLI
     RTS
 
 SILENCE_PSG:
@@ -1068,36 +1297,901 @@ CLR_SHADOW_LOOP:
 ; ==============================================================================
 ; Low-Level ProDOS MLI Direct Block Read Call ($80)
 ; ==============================================================================
-READ_BLOCK_MLI:
-    JSR MLI
-    !byte $80                   ; READ_BLOCK Call
-    !word READ_BLOCK_PARAMS     ; Parameter Block
+; Image files are ProDOS seedling/sapling files. Locate their catalog entries,
+; then use READ_BLOCK directly so large IMG files never need an MLI OPEN buffer.
+PREPARE_DIRECT_FILE:
+    JSR BUILD_FILE_PATH
+    BCC DIRECT_PATH_OK
+    JMP DIRECT_FILE_ERROR
+DIRECT_PATH_OK:
+    LDA FILE_KIND
+    BEQ DIRECT_PALETTE_NAME
+    LDA #10
+    STA TARGET_LENGTH
+    JMP COPY_TARGET_NAME
+DIRECT_PALETTE_NAME:
+    LDA #11
+    STA TARGET_LENGTH
+COPY_TARGET_NAME:
+    LDA PATH_BUF
+    SEC
+    SBC TARGET_LENGTH
+    TAY
+    LDX #$00
+COPY_TARGET_NAME_LOOP:
+    LDA PATH_BUF+1,Y
+    STA FILE_NAME_BUF,X
+    INY
+    INX
+    CPX TARGET_LENGTH
+    BCC COPY_TARGET_NAME_LOOP
+
+    ; Resolve DATA1..DATA3 through the ProDOS prefix path, which may be a
+    ; nested app directory on a VeraSD volume rather than the volume root.
+    JSR FIND_IMAGE_DIRECTORY
+    BCC DIRECT_DATA_DIR_OK
+    JMP DIRECT_FILE_ERROR
+DIRECT_DATA_DIR_OK:
+    LDA MLI_BLOCK
+    STA DATA_DIR_BLOCK
+    LDA MLI_BLOCK+1
+    STA DATA_DIR_BLOCK+1
+
+    ; Locate IMGnnn.BIN or VPALnnn.BIN in the selected DATA1..DATA3 folder.
+    LDA FILE_NAME_BUF
+    STA TARGET_NAME
+    LDA FILE_NAME_BUF+1
+    STA TARGET_NAME+1
+    LDA FILE_NAME_BUF+2
+    STA TARGET_NAME+2
+    LDA FILE_NAME_BUF+3
+    STA TARGET_NAME+3
+    LDA FILE_NAME_BUF+4
+    STA TARGET_NAME+4
+    LDA FILE_NAME_BUF+5
+    STA TARGET_NAME+5
+    LDA FILE_NAME_BUF+6
+    STA TARGET_NAME+6
+    LDA FILE_NAME_BUF+7
+    STA TARGET_NAME+7
+    LDA FILE_NAME_BUF+8
+    STA TARGET_NAME+8
+    LDA FILE_NAME_BUF+9
+    STA TARGET_NAME+9
+    LDA FILE_KIND
+    BNE DIRECT_IMAGE_NAME_READY
+    LDA FILE_NAME_BUF+10
+    STA TARGET_NAME+10
+DIRECT_IMAGE_NAME_READY:
+    LDA FILE_KIND
+    BEQ DIRECT_SET_PALETTE_LENGTH
+    LDA #10
+    BNE DIRECT_SET_TARGET_LENGTH
+DIRECT_SET_PALETTE_LENGTH:
+    LDA #11
+DIRECT_SET_TARGET_LENGTH:
+    STA TARGET_LENGTH
+    LDA DATA_DIR_BLOCK
+    STA DIR_BLOCK
+    LDA DATA_DIR_BLOCK+1
+    STA DIR_BLOCK+1
+    JSR FIND_CATALOG_ENTRY
+    BCC DIRECT_ENTRY_OK
+    JMP DIRECT_FILE_ERROR
+DIRECT_ENTRY_OK:
+
+    LDA FILE_KIND
+    BEQ DIRECT_READ_PALETTE
+    LDA STORAGE_TYPE
+    CMP #$02
+    BEQ DIRECT_IMAGE_IS_SAPLING
+    JMP DIRECT_FILE_ERROR
+DIRECT_IMAGE_IS_SAPLING:
+    ; Sapling key block points to an index table of 256 data-block numbers.
+    JSR READ_PRODOS_BLOCK
+    BCC DIRECT_INDEX_READ_OK
+    JMP DIRECT_FILE_ERROR
+DIRECT_INDEX_READ_OK:
+    LDY #$00
+DIRECT_COPY_INDEX:
+    LDA DATA_BUF,Y
+    STA INDEX_BUF,Y
+    LDA DATA_BUF+$100,Y
+    STA INDEX_BUF+$100,Y
+    INY
+    BNE DIRECT_COPY_INDEX
+    CLC
     RTS
 
-; ==============================================================================
-; ProDOS MLI READ_BLOCK Parameter Block (Param Count = 3)
-; ==============================================================================
-READ_BLOCK_PARAMS:
-    !byte $03                   ; Param count = 3
-MLI_UNIT_NUM:
-    !byte $70                   ; Unit number (Updated dynamically from $BF30)
-    !word DATA_BUF              ; 512-Byte Data Buffer ($3800)
-MLI_BLK_NUM:
-    !word $03E8                 ; 16-Bit Block Number (Updated dynamically)
+DIRECT_READ_PALETTE:
+    LDA STORAGE_TYPE
+    CMP #$01
+    BEQ DIRECT_PALETTE_IS_SEEDLING
+    JMP DIRECT_FILE_ERROR
+DIRECT_PALETTE_IS_SEEDLING:
+    ; Seedling key block is the palette's only data block.
+    JMP READ_PRODOS_BLOCK
 
-CANYON_READ_PARAMS:
-    !byte $03
-CANYON_UNIT_NUM:
-    !byte $70
+; Follow the directory portion of PATH_BUF from the volume root to DATA1/2/3.
+; GET_PREFIX provides paths such as /SLIDESHOW/ (boot volume) or
+; /VERASD/SLIDESHOW/ (app copied into a directory on another volume).
+FIND_IMAGE_DIRECTORY:
+    LDA CURRENT_IMG_H
+    BNE FIND_IMAGE_DIR_3
+    LDA CURRENT_IMG
+    CMP #126
+    BCC FIND_IMAGE_DIR_1
+    CMP #251
+    BCC FIND_IMAGE_DIR_2
+FIND_IMAGE_DIR_3:
+    LDA #$33
+    BNE FIND_IMAGE_DIR_SET
+FIND_IMAGE_DIR_2:
+    LDA #$32
+    BNE FIND_IMAGE_DIR_SET
+FIND_IMAGE_DIR_1:
+    LDA #$31
+FIND_IMAGE_DIR_SET:
+    STA IMAGE_FOLDER_DIGIT
+    LDA #$02
+    STA DIR_BLOCK
+    LDA #$00
+    STA DIR_BLOCK+1
+    LDA #$01
+    STA PATH_SCAN_IDX
+FIND_IMAGE_SKIP_VOLUME:
+    LDX PATH_SCAN_IDX
+    CPX PATH_BUF
+    BCC FIND_IMAGE_VOLUME_CHAR_OK
+    JMP FIND_IMAGE_DIR_ERROR
+FIND_IMAGE_VOLUME_CHAR_OK:
+    LDA PATH_BUF+1,X
+    CMP #$2F
+    BEQ FIND_IMAGE_VOLUME_DONE
+    INC PATH_SCAN_IDX
+    JMP FIND_IMAGE_SKIP_VOLUME
+FIND_IMAGE_VOLUME_DONE:
+    INC PATH_SCAN_IDX
+FIND_IMAGE_COMPONENT:
+    LDA #$00
+    STA TARGET_LENGTH
+    LDY #$00
+FIND_IMAGE_COMPONENT_CHAR:
+    LDX PATH_SCAN_IDX
+    CPX PATH_BUF
+    BCC FIND_IMAGE_COMPONENT_CHAR_OK
+    JMP FIND_IMAGE_DIR_ERROR
+FIND_IMAGE_COMPONENT_CHAR_OK:
+    LDA PATH_BUF+1,X
+    CMP #$2F
+    BEQ FIND_IMAGE_COMPONENT_DONE
+    CPY #$0F
+    BCC FIND_IMAGE_COMPONENT_STORE
+    JMP FIND_IMAGE_DIR_ERROR
+FIND_IMAGE_COMPONENT_STORE:
+    STA TARGET_NAME,Y
+    INY
+    INC TARGET_LENGTH
+    INC PATH_SCAN_IDX
+    JMP FIND_IMAGE_COMPONENT_CHAR
+FIND_IMAGE_COMPONENT_DONE:
+    ; Stop at the matching DATA group directory.
+    LDA TARGET_LENGTH
+    CMP #$05
+    BNE FIND_IMAGE_PARENT_COMPONENT
+    LDA TARGET_NAME
+    CMP #$44
+    BNE FIND_IMAGE_PARENT_COMPONENT
+    LDA TARGET_NAME+1
+    CMP #$41
+    BNE FIND_IMAGE_PARENT_COMPONENT
+    LDA TARGET_NAME+2
+    CMP #$54
+    BNE FIND_IMAGE_PARENT_COMPONENT
+    LDA TARGET_NAME+3
+    CMP #$41
+    BNE FIND_IMAGE_PARENT_COMPONENT
+    LDA TARGET_NAME+4
+    CMP IMAGE_FOLDER_DIGIT
+    BEQ FIND_IMAGE_TARGET_COMPONENT
+FIND_IMAGE_PARENT_COMPONENT:
+    JSR FIND_CATALOG_ENTRY
+    BCC FIND_IMAGE_PARENT_FOUND
+    JMP FIND_IMAGE_DIR_ERROR
+FIND_IMAGE_PARENT_FOUND:
+    LDA MLI_BLOCK
+    STA DIR_BLOCK
+    LDA MLI_BLOCK+1
+    STA DIR_BLOCK+1
+    INC PATH_SCAN_IDX
+    JMP FIND_IMAGE_COMPONENT
+FIND_IMAGE_TARGET_COMPONENT:
+    JSR FIND_CATALOG_ENTRY
+    BCC FIND_IMAGE_TARGET_FOUND
+    JMP FIND_IMAGE_DIR_ERROR
+FIND_IMAGE_TARGET_FOUND:
+    LDA MLI_BLOCK
+    STA DATA_DIR_BLOCK
+    LDA MLI_BLOCK+1
+    STA DATA_DIR_BLOCK+1
+    CLC
+    RTS
+FIND_IMAGE_DIR_ERROR:
+    SEC
+    RTS
+
+DIRECT_FILE_ERROR:
+    SEC
+    RTS
+
+; Search a ProDOS directory chain. Input: DIR_BLOCK, TARGET_LENGTH/NAME.
+; Output: MLI_BLOCK=entry key block, STORAGE_TYPE=entry storage type.
+FIND_CATALOG_ENTRY:
+    ; Only the first directory block has the directory header in slot 0.
+    ; Continuation blocks use all 13 slots for file entries.
+    LDA DIR_BLOCK
+    STA CATALOG_START_BLOCK
+    LDA DIR_BLOCK+1
+    STA CATALOG_START_BLOCK+1
+FIND_CATALOG_BLOCK:
+    LDA DIR_BLOCK
+    STA MLI_BLOCK
+    LDA DIR_BLOCK+1
+    STA MLI_BLOCK+1
+    JSR READ_PRODOS_BLOCK
+    BCC FIND_CATALOG_BLOCK_READY
+    ; Preserve the actual READ_BLOCK status instead of reporting file-not-found.
+    SEC
+    RTS
+FIND_CATALOG_BLOCK_READY:
+    ; Preserve the root catalog DATA entry bytes for diagnostics.
+    ; Slot 7 begins at offset 4 + 7*39 = $0115 in block 2.
+    LDA DIR_BLOCK
+    CMP #$02
+    BNE FIND_CATALOG_NOT_ROOT
+    LDA DIR_BLOCK+1
+    BNE FIND_CATALOG_NOT_ROOT
+    LDY #$15
+    LDX #$00
+FIND_CATALOG_SAVE_DATA_DIAG:
+    LDA DATA_BUF+$100,Y
+    STA DATA_DIAG,X
+    INY
+    INX
+    CPX #$05
+    BCC FIND_CATALOG_SAVE_DATA_DIAG
+FIND_CATALOG_NOT_ROOT:
+    LDA DATA_BUF+2
+    STA NEXT_DIR_BLOCK
+    LDA DATA_BUF+3
+    STA NEXT_DIR_BLOCK+1
+    ; Skip slot 0 only in the initial block; continuation blocks use slot 0.
+    LDA DIR_BLOCK
+    CMP CATALOG_START_BLOCK
+    BNE FIND_CATALOG_CONTINUATION
+    LDA DIR_BLOCK+1
+    CMP CATALOG_START_BLOCK+1
+    BNE FIND_CATALOG_CONTINUATION
+    LDA #<$382B
+    STA DIR_PTR
+    LDA #>$3804
+    STA DIR_PTR+1
+    LDA #12
+    STA CATALOG_ENTRIES_LEFT
+    JMP FIND_CATALOG_ENTRY_LOOP
+FIND_CATALOG_CONTINUATION:
+    LDA #<$3804
+    STA DIR_PTR
+    LDA #>$3804
+    STA DIR_PTR+1
+    LDA #13
+    STA CATALOG_ENTRIES_LEFT
+FIND_CATALOG_ENTRY_LOOP:
+    LDY #$00
+    LDA (DIR_PTR),Y
+    BEQ FIND_CATALOG_NEXT_ENTRY
+    AND #$0F
+    CMP TARGET_LENGTH
+    BNE FIND_CATALOG_NEXT_ENTRY
+    LDX #$00
+FIND_CATALOG_NAME_LOOP:
+    TXA
+    TAY
+    INY
+    LDA (DIR_PTR),Y
+    CMP TARGET_NAME,X
+    BNE FIND_CATALOG_NAME_MISMATCH
+    INX
+    CPX TARGET_LENGTH
+    BCC FIND_CATALOG_NAME_LOOP
+    LDY #$00
+    LDA (DIR_PTR),Y
+    LSR
+    LSR
+    LSR
+    LSR
+    STA STORAGE_TYPE
+    LDY #$11
+    LDA (DIR_PTR),Y
+    STA MLI_BLOCK
+    LDY #$12
+    LDA (DIR_PTR),Y
+    STA MLI_BLOCK+1
+    CLC
+    RTS
+FIND_CATALOG_NAME_MISMATCH:
+    JMP FIND_CATALOG_NEXT_ENTRY
+FIND_CATALOG_NEXT_ENTRY:
+    CLC
+    LDA DIR_PTR
+    ADC #39
+    STA DIR_PTR
+    LDA DIR_PTR+1
+    ADC #$00
+    STA DIR_PTR+1
+    DEC CATALOG_ENTRIES_LEFT
+    BNE FIND_CATALOG_ENTRY_LOOP
+    LDA NEXT_DIR_BLOCK
+    ORA NEXT_DIR_BLOCK+1
+    BNE FIND_NEXT_CATALOG_BLOCK
+    JMP CATALOG_NOT_FOUND
+FIND_NEXT_CATALOG_BLOCK:
+    LDA NEXT_DIR_BLOCK
+    STA DIR_BLOCK
+    LDA NEXT_DIR_BLOCK+1
+    STA DIR_BLOCK+1
+    JMP FIND_CATALOG_BLOCK
+CATALOG_NOT_FOUND:
+    ; Distinguish a missing DATA directory from a missing asset entry.
+    ; Capture the pointer at which the directory scan ended.
+    LDA DIR_PTR
+    STA SCAN_PTR_DIAG
+    LDA DIR_PTR+1
+    STA SCAN_PTR_DIAG+1
+    LDA TARGET_LENGTH
+    CMP #$04
+    BNE CATALOG_FILE_MISSING
+    LDA #$45
+    BNE CATALOG_STORE_MISSING
+CATALOG_FILE_MISSING:
+    LDA #$46
+CATALOG_STORE_MISSING:
+    STA FILE_MLI_STATUS
+    SEC
+    RTS
+
+READ_PRODOS_BLOCK:
+    LDA #$03
+    STA BLOCK_PARAMS
+    LDA $BF30
+    STA BLOCK_PARAMS+1
+    LDA #<DATA_BUF
+    STA BLOCK_PARAMS+2
+    LDA #>DATA_BUF
+    STA BLOCK_PARAMS+3
+    LDA MLI_BLOCK
+    STA BLOCK_PARAMS+4
+    LDA MLI_BLOCK+1
+    STA BLOCK_PARAMS+5
+    JSR MLI
+    !byte $80
+    !word BLOCK_PARAMS
+    STA FILE_MLI_STATUS
+    RTS
+
+DIR_BLOCK:
+    !word $0000
+CATALOG_START_BLOCK:
+    !word $0000
+NEXT_DIR_BLOCK:
+    !word $0000
+DATA_DIR_BLOCK:
+    !word $0000
+MLI_BLOCK:
+    !word $0000
+TARGET_LENGTH:
+    !byte $00
+TARGET_NAME:
+    !byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+FILE_NAME_BUF:
+    !byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+STORAGE_TYPE:
+    !byte $00
+CATALOG_ENTRIES_LEFT:
+    !byte $00
+IMAGE_BLOCK_INDEX:
+    !byte $00
+BLOCK_PARAMS:
+    !byte $03,$00
+    !word DATA_BUF
+    !word $0000
+DATA_DIAG:
+    !byte $00,$00,$00,$00,$00
+DATA_DIAG_INDEX:
+    !byte $00
+DATA_DIAG_BYTE:
+    !byte $00
+SCAN_PTR_DIAG:
+    !word $0000
+PAL_STAGE:
+    !byte $00
+READ_DIAG_INDEX:
+    !byte $00
+READ_DIAG_BYTE:
+    !byte $00
+PATH_SCAN_IDX:
+    !byte $00
+IMAGE_FOLDER_DIGIT:
+    !byte $00
+
+OPEN_SELECTED_FILE:
+    PHP
+    JSR BUILD_FILE_PATH
+    BCS OPEN_FILE_ERROR
+    LDA #<PATH_BUF
+    STA OPEN_PARAMS+1
+    LDA #>PATH_BUF
+    STA OPEN_PARAMS+2
+    LDA #<FILE_IO_BUF
+    STA OPEN_PARAMS+3
+    LDA #>FILE_IO_BUF
+    STA OPEN_PARAMS+4
+    LDA FILE_KIND
+    CMP #$02
+    BCC OPEN_FILE_CALL
+    LDA #<$6400
+    STA OPEN_PARAMS+3
+    LDA #>$6400
+    STA OPEN_PARAMS+4
+OPEN_FILE_CALL:
+    ; OPEN is allowed to use its pathname as workspace on some ProDOS
+    ; versions. Keep the intended name for useful diagnostics on failure.
+    LDX #$00
+SAVE_OPEN_PATH:
+    LDA PATH_BUF,X
+    STA PATH_BACKUP,X
+    INX
+    CPX #$40
+    BCC SAVE_OPEN_PATH
+    JSR MLI
+    !byte $C8
+    !word OPEN_PARAMS
+    STA FILE_MLI_STATUS
+    BCS OPEN_FILE_ERROR
+    LDA OPEN_PARAMS+5
+    STA FILE_REF
+    LDA FILE_KIND
+    CMP #$02
+    BCC OPEN_IMAGE_RESULT
+    LDA FILE_REF
+    STA MUSIC_REF
+    LDA #$01
+    STA MUSIC_FILE_OPEN
+    LDX #$00
+    JMP OPEN_FILE_RETURN
+OPEN_IMAGE_RESULT:
+    LDA FILE_REF
+    STA IMAGE_REF
+    LDX #$00
+    JMP OPEN_FILE_RETURN
+OPEN_FILE_ERROR:
+    LDX #$00
+RESTORE_OPEN_PATH:
+    LDA PATH_BACKUP,X
+    STA PATH_BUF,X
+    INX
+    CPX #$40
+    BCC RESTORE_OPEN_PATH
+    LDX #$01
+OPEN_FILE_RETURN:
+    PLP
+    TXA
+    BEQ OPEN_FILE_OK
+    SEC
+    RTS
+OPEN_FILE_OK:
+    CLC
+    RTS
+
+CLOSE_MUSIC_FILE:
+    LDA MUSIC_FILE_OPEN
+    BEQ CLOSE_MUSIC_DONE
+    PHP
+    LDA MUSIC_REF
+    STA CLOSE_PARAMS+1
+    JSR MLI
+    !byte $CC
+    !word CLOSE_PARAMS
+    LDX #$00
+    BCC CLOSE_MUSIC_RETURN
+    LDX #$01
+CLOSE_MUSIC_RETURN:
+    LDA #$00
+    STA MUSIC_FILE_OPEN
+    PLP
+    TXA
+    BEQ CLOSE_MUSIC_OK
+    SEC
+    RTS
+CLOSE_MUSIC_OK:
+    CLC
+    RTS
+CLOSE_MUSIC_DONE:
+    CLC
+    RTS
+
+READ_IMAGE_BLOCK:
+    PHP
+    LDA IMAGE_REF
+    STA READ_PARAMS+1
+    JSR READ_FILE_BLOCK_LOCKED
+    TAX
+    PLP
+    TXA
+    BEQ READ_IMAGE_OK
+    SEC
+    RTS
+READ_IMAGE_OK:
+    CLC
+    RTS
+
+CLOSE_IMAGE_FILE:
+    LDA IMAGE_REF
+    STA CLOSE_PARAMS+1
+    JSR MLI
+    !byte $CC
+    !word CLOSE_PARAMS
+    STA FILE_MLI_STATUS
+    RTS
+
+READ_MUSIC_BLOCK:
+    PHP
+    LDA MUSIC_REF
+    STA READ_PARAMS+1
+    JSR READ_FILE_BLOCK_LOCKED
+    TAX
+    PLP
+    TXA
+    BEQ READ_MUSIC_OK
+    SEC
+    RTS
+READ_MUSIC_OK:
+    CLC
+    RTS
+
+READ_FILE_BLOCK_LOCKED:
+    LDA FILE_BUF_PTR
+    STA READ_PARAMS+2
+    LDA FILE_BUF_PTR+1
+    STA READ_PARAMS+3
+    LDA #$00
+    STA READ_PARAMS+4
+    LDA #$02
+    STA READ_PARAMS+5
+    LDA #$00
+    STA READ_PARAMS+6
+    STA READ_PARAMS+7
+    JSR MLI
+    !byte $CA
+    !word READ_PARAMS
+    STA FILE_MLI_STATUS
+    BCS READ_FILE_ERROR
+    LDA READ_PARAMS+6
+    BNE READ_FILE_ERROR
+    LDA READ_PARAMS+7
+    CMP #$02
+    BNE READ_FILE_ERROR
+    ; Callers consume the status from A; leave the transfer-count byte out
+    ; of A (it is currently $02 for a successful 512-byte read).
+    LDX #$00
+    LDA #$00
+    RTS
+READ_FILE_ERROR:
+    LDX #$01
+    LDA #$01
+    RTS
+
+BUILD_FILE_PATH:
+    LDA #<PATH_BUF
+    STA GET_PREFIX_PARAMS+1
+    LDA #>PATH_BUF
+    STA GET_PREFIX_PARAMS+2
+    JSR MLI
+    !byte $C7
+    !word GET_PREFIX_PARAMS
+    BCC BUILD_PREFIX_READY
+    JMP BUILD_PATH_ERROR
+BUILD_PREFIX_READY:
+    LDA PATH_BUF
+    BNE BUILD_PREFIX_PRESENT
+    LDA #$2F
+    JSR APPEND_PATH_CHAR
+    LDA #$53
+    JSR APPEND_PATH_CHAR
+    LDA #$4C
+    JSR APPEND_PATH_CHAR
+    LDA #$49
+    JSR APPEND_PATH_CHAR
+    LDA #$44
+    JSR APPEND_PATH_CHAR
+    LDA #$45
+    JSR APPEND_PATH_CHAR
+    LDA #$53
+    JSR APPEND_PATH_CHAR
+    LDA #$48
+    JSR APPEND_PATH_CHAR
+    LDA #$4F
+    JSR APPEND_PATH_CHAR
+    LDA #$57
+    JSR APPEND_PATH_CHAR
+    LDA #$2F
+    JSR APPEND_PATH_CHAR
+    JMP BUILD_APPEND_DATA
+BUILD_PREFIX_PRESENT:
+    TAY
+    DEY
+    LDA PATH_BUF+1,Y
+    CMP #$2F
+    BEQ BUILD_APPEND_DATA
+    LDA #$2F
+    JSR APPEND_PATH_CHAR
+BUILD_APPEND_DATA:
+    LDA #$44
+    JSR APPEND_PATH_CHAR
+    LDA #$41
+    JSR APPEND_PATH_CHAR
+    LDA #$54
+    JSR APPEND_PATH_CHAR
+    LDA #$41
+    JSR APPEND_PATH_CHAR
+    LDA FILE_KIND
+    CMP #$02
+    BCS BUILD_APPEND_DATA_SLASH
+    LDA CURRENT_IMG_H
+    BNE BUILD_PATH_DIR_3
+    LDA CURRENT_IMG
+    CMP #126
+    BCC BUILD_PATH_DIR_1
+    CMP #251
+    BCC BUILD_PATH_DIR_2
+BUILD_PATH_DIR_3:
+    LDA #$33
+    BNE BUILD_PATH_APPEND_DIR
+BUILD_PATH_DIR_2:
+    LDA #$32
+    BNE BUILD_PATH_APPEND_DIR
+BUILD_PATH_DIR_1:
+    LDA #$31
+BUILD_PATH_APPEND_DIR:
+    JSR APPEND_PATH_CHAR
+BUILD_APPEND_DATA_SLASH:
+    LDA #$2F
+    JSR APPEND_PATH_CHAR
+    LDA FILE_KIND
+    CMP #$02
+    BCS BUILD_MUSIC_PATH
+    CMP #$01
+    BEQ BUILD_IMAGE_NAME
+    LDA #$56              ; V
+    JSR APPEND_PATH_CHAR
+    LDA #$50              ; P
+    JSR APPEND_PATH_CHAR
+    LDA #$41              ; A
+    JSR APPEND_PATH_CHAR
+    LDA #$4C              ; L
+    JSR APPEND_PATH_CHAR
+    JMP BUILD_IMAGE_DIGITS
+BUILD_IMAGE_NAME:
+    LDA #$49              ; I
+    JSR APPEND_PATH_CHAR
+    LDA #$4D              ; M
+    JSR APPEND_PATH_CHAR
+    LDA #$47              ; G
+    JSR APPEND_PATH_CHAR
+    JMP BUILD_IMAGE_DIGITS
+BUILD_MUSIC_PATH:
+    SEC
+    SBC #$02
+    TAX
+    LDA MUSIC_FILE_PTR_LO,X
+    STA PATH_SRC_PTR_L
+    LDA MUSIC_FILE_PTR_HI,X
+    STA PATH_SRC_PTR_H
+    JSR APPEND_PATH_STRING
+    BCC BUILD_MUSIC_NAME_OK
+    JMP BUILD_PATH_ERROR
+BUILD_MUSIC_NAME_OK:
+    JMP BUILD_PATH_COMPLETE
+
+BUILD_IMAGE_DIGITS:
+    BCC BUILD_IMAGE_NUMBER_OK
+    JMP BUILD_PATH_ERROR
+BUILD_IMAGE_NUMBER_OK:
+    LDA CURRENT_IMG
+    STA NUMBER_LO
+    LDA CURRENT_IMG_H
+    STA NUMBER_HI
+    LDA #$00
+    STA NUMBER_HUNDREDS
+BUILD_HUNDREDS_LOOP:
+    LDA NUMBER_HI
+    BNE SUBTRACT_HUNDRED
+    LDA NUMBER_LO
+    CMP #100
+    BCC BUILD_HUNDREDS_DONE
+SUBTRACT_HUNDRED:
+    SEC
+    LDA NUMBER_LO
+    SBC #100
+    STA NUMBER_LO
+    LDA NUMBER_HI
+    SBC #$00
+    STA NUMBER_HI
+    INC NUMBER_HUNDREDS
+    JMP BUILD_HUNDREDS_LOOP
+BUILD_HUNDREDS_DONE:
+    LDA NUMBER_HUNDREDS
+    CLC
+    ADC #$30
+    JSR APPEND_PATH_CHAR
+    LDA #$00
+    STA NUMBER_TENS
+BUILD_TENS_LOOP:
+    LDA NUMBER_LO
+    CMP #10
+    BCC BUILD_TENS_DONE
+    SEC
+    SBC #10
+    STA NUMBER_LO
+    INC NUMBER_TENS
+    JMP BUILD_TENS_LOOP
+BUILD_TENS_DONE:
+    LDA NUMBER_TENS
+    CLC
+    ADC #$30
+    JSR APPEND_PATH_CHAR
+    LDA NUMBER_LO
+    CLC
+    ADC #$30
+    JSR APPEND_PATH_CHAR
+    LDA #$2E              ; .
+    JSR APPEND_PATH_CHAR
+    LDA #$42              ; B
+    JSR APPEND_PATH_CHAR
+    LDA #$49              ; I
+    JSR APPEND_PATH_CHAR
+    LDA #$4E              ; N
+    JSR APPEND_PATH_CHAR
+BUILD_PATH_COMPLETE:
+    CLC
+    RTS
+BUILD_PATH_ERROR:
+    SEC
+    RTS
+
+APPEND_PATH_STRING:
+    LDA #$00
+    STA PATH_SRC_IDX
+APPEND_PATH_LOOP:
+    LDY PATH_SRC_IDX
+    LDA (PATH_SRC_PTR_L),Y
+    BEQ APPEND_PATH_DONE
+    JSR APPEND_PATH_CHAR
+    BCS APPEND_PATH_ERROR
+    INC PATH_SRC_IDX
+    JMP APPEND_PATH_LOOP
+APPEND_PATH_DONE:
+    CLC
+    RTS
+APPEND_PATH_ERROR:
+    SEC
+    RTS
+
+APPEND_PATH_CHAR:
+    STA PATH_CHAR
+    LDY PATH_BUF
+    CPY #$3F
+    BCS APPEND_PATH_CHAR_ERROR
+    LDA PATH_CHAR
+    STA PATH_BUF+1,Y
+    INY
+    STY PATH_BUF
+    CLC
+    RTS
+APPEND_PATH_CHAR_ERROR:
+    SEC
+    RTS
+
+FILE_KIND:
+    !byte $00
+FILE_ERROR_KIND:
+    !byte $00
+FILE_MLI_STATUS:
+    !byte $00
+FILE_REF:
+    !byte $00
+IMAGE_REF:
+    !byte $00
+MUSIC_REF:
+    !byte $00
+MUSIC_FILE_OPEN:
+    !byte $00
+MUSIC_REFILL_PENDING:
+    !byte $00
+MUSIC_CHANGE_PENDING:
+    !byte $00
+MUSIC_HOLD:
+    !byte $00
+MUSIC_WAITING:
+    !byte $00
+MUSIC_PREFETCH_DONE:
+    !byte $00
+SERVICE_VERA_CTRL:
+    !byte $00
+SERVICE_VERA_ADDR_L:
+    !byte $00
+SERVICE_VERA_ADDR_M:
+    !byte $00
+SERVICE_VERA_ADDR_H:
+    !byte $00
+FILE_BUF_PTR:
+    !word DATA_BUF
 CANYON_BUF_PTR:
     !word $4000
-CANYON_BLK_NUM:
-    !word $0320
-
-MUSIC_START_LO:
-    !byte $20,$78,$D0
-MUSIC_START_HI:
-    !byte $03,$05,$07
+MUSIC_LOAD_COUNT:
+    !byte $00
+NUMBER_LO:
+    !byte $00
+NUMBER_HI:
+    !byte $00
+NUMBER_HUNDREDS:
+    !byte $00
+NUMBER_TENS:
+    !byte $00
+OPEN_PARAMS:
+    !byte $03
+    !word PATH_BUF
+    !word FILE_IO_BUF
+    !byte $00
+GET_PREFIX_PARAMS:
+    !byte $01
+    !word PATH_BUF
+PATH_BACKUP:
+    !byte $00,$00,$00,$00,$00,$00,$00,$00
+    !byte $00,$00,$00,$00,$00,$00,$00,$00
+    !byte $00,$00,$00,$00,$00,$00,$00,$00
+    !byte $00,$00,$00,$00,$00,$00,$00,$00
+    !byte $00,$00,$00,$00,$00,$00,$00,$00
+    !byte $00,$00,$00,$00,$00,$00,$00,$00
+    !byte $00,$00,$00,$00,$00,$00,$00,$00
+    !byte $00,$00,$00,$00,$00,$00,$00,$00
+CLOSE_PARAMS:
+    !byte $01,$00
+BASIC_ZP_SAVE:
+    HEX 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+READ_PARAMS:
+    !byte $04,$00
+    !word DATA_BUF
+    !word $0200
+    !word $0000
+HEX_DIGITS:
+    !byte $B0,$B1,$B2,$B3,$B4,$B5,$B6,$B7,$B8,$B9,$C1,$C2,$C3,$C4,$C5,$C6
+MUSIC_FILE_PTR_LO:
+    !byte <MUSIC_FILE_0,<MUSIC_FILE_1,<MUSIC_FILE_2
+MUSIC_FILE_PTR_HI:
+    !byte >MUSIC_FILE_0,>MUSIC_FILE_1,>MUSIC_FILE_2
+MUSIC_FILE_0:
+    ASC "SBINTRO.PSG"
+    !byte $00
+MUSIC_FILE_1:
+    ASC "CANYON.PSG"
+    !byte $00
+MUSIC_FILE_2:
+    ASC "GREENHILL.PSG"
+    !byte $00
 MUSIC_NAME_PTR_LO:
     !byte <MUSIC_NAME_0,<MUSIC_NAME_1,<MUSIC_NAME_2
 MUSIC_NAME_PTR_HI:
