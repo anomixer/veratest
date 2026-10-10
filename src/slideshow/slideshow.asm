@@ -1295,10 +1295,11 @@ CLR_SHADOW_LOOP:
     RTS
 
 ; ==============================================================================
-; Low-Level ProDOS MLI Direct Block Read Call ($80)
+; Low-Level ProDOS MLI READ_BLOCK for a file-allocated block
 ; ==============================================================================
 ; Image files are ProDOS seedling/sapling files. Locate their catalog entries,
-; then use READ_BLOCK directly so large IMG files never need an MLI OPEN buffer.
+; resolve each allocated block, then read it directly into VERA so large IMG
+; files never need an MLI OPEN buffer or a 76,800-byte RAM staging area.
 PREPARE_DIRECT_FILE:
     JSR BUILD_FILE_PATH
     BCC DIRECT_PATH_OK

@@ -171,7 +171,8 @@ const appStage = path.join(tempRoot, "app")
 const dataStage = path.join(tempRoot, "data")
 const imageStages = ["data1", "data2", "data3"].map(name => path.join(tempRoot, name))
 const volumeName = "SLIDESHOW"
-const cadius = process.env.CADIUS || "cadius.exe"
+const bundledCadius = path.join(projectRoot, "tools", "cadius.exe")
+const cadius = process.env.CADIUS || (fs.existsSync(bundledCadius) ? bundledCadius : "cadius.exe")
 
 function runCadius(...args) {
   execFileSync(cadius, args, { stdio: "inherit" })

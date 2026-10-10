@@ -67,7 +67,7 @@ The sound demo in `SPRSND.BIN` runs a 32-step arcade chiptune engine written in 
 
 ## 🛠️ 4. Build System & Modular Architecture
 
-The project uses a modular Node.js build architecture. Building the slideshow HDV also requires Cadius (`cadius.exe`) on `PATH`; set `CADIUS` to its full path when it is installed elsewhere.
+The project uses a modular Node.js build architecture. Both disk images are packaged with the bundled `tools/cadius.exe`; set `CADIUS` to override its path.
 
 ```bash
 # Build 140KB floppy disk & preview
@@ -86,6 +86,7 @@ veratest/
 ├── slideshow.hdv              # 32MB 375-image fullscreen Mode 7 hard disk image
 ├── slideshow.png              # 560x384 preview screenshot for Slideshow Showcase
 ├── assets/                    # Self-contained ProDOS 2.4.3 and 32MB blank disk images
+├── tools/cadius.exe           # ProDOS-aware disk image/file packager
 └── src/
     ├── asm6502.mjs            # Standalone two-pass 6502 assembler
     ├── applebasic.mjs         # Standalone Applesoft BASIC compiler
@@ -93,7 +94,7 @@ veratest/
     ├── vera.inc               # VERA register offsets and Apple II hardware softswitches
     │
     ├── veratest/              # 🎮 7-in-1 Flagship Test Suite & Showcase
-    │   ├── veratest.mjs       # 140KB ProDOS 2.4.3 floppy builder & PNG renderer
+    │   ├── veratest.mjs       # Cadius-based 140KB ProDOS floppy packager & PNG renderer
     │   ├── startup.bas        # Applesoft BASIC dual-port hardware probe and menu script
     │   ├── sprite.asm         # 16-Sprite 4bpp crystal alien bouncing animation
     │   ├── spritesnd.asm      # 16-Sprite + 4-Voice stereo PSG chiptune audio player
@@ -109,7 +110,7 @@ veratest/
     │   └── preview.mjs        # 560x384 PNG preview screenshot generator
     │
     └── slideshow/             # 🖼️ 32MB Fullscreen 375-Image Slideshow Engine
-        ├── slideshow.asm      # Pure 6502 Direct Block MLI ($80) streaming engine
+        ├── slideshow.asm      # Pure 6502 file-level ProDOS streaming engine
         ├── startup.bas        # Interactive Applesoft BASIC menu script
         ├── slideshow_hdv.mjs  # Cadius-based HDV packager & PNG renderer
         ├── preview.mjs        # 560x384 PNG preview screenshot generator
@@ -124,9 +125,9 @@ veratest/
 2. **Dedicated Applesoft BASIC Compiler (`src/applebasic.mjs`)**:
    - Parses plain-text `startup.bas` directly into native Apple II binary memory-linked format (`NextPtr[2] + LineNo[2] + Tokens + 0x00`).
    - Strips non-string whitespace (`$20`) matching native Apple II ROM tokenizer behavior, eliminating syntax errors.
-3. **ProDOS 2.4.3 File System Engine & Direct Block MLI (`$80`) Streaming**:
-   - Formats standard 140KB floppy and 32MB hard disk images with Volume Headers and Block Allocation Bitmaps.
-   - Direct Block MLI (`$80`) engine in `slideshow.asm` scans the ProDOS catalog and sapling index, then streams each allocated 512-byte image block into VERA VRAM without assuming contiguous disk allocation.
+3. **Cadius ProDOS Packaging & File-Level Streaming**:
+   - Both the 140KB floppy and 32MB hard disk are packaged with Cadius; it creates catalog entries, storage indexes, and volume bitmaps.
+   - The 7-in-1 Sonic demo opens `SONIC.DAT` with ProDOS MLI file calls. The slideshow resolves image/palette blocks from each ProDOS file's catalog entry and index, then uses MLI `READ_BLOCK` to stream those allocated blocks directly to VERA without assuming contiguous physical layout.
 4. **Applesoft BASIC `STARTUP` Programs**:
    - Dual-port signature probing across Slot 2 and Slot 4.
    - Automatically executes corresponding Slot 2 or Slot 4 binary routines.
@@ -138,9 +139,9 @@ The generated `slideshow.hdv` is a bootable 32 MiB ProDOS 2.4.3 volume named `SL
 - `VPAL001.BIN`–`VPAL375.BIN`: 512-byte VERA palettes.
 - `IMG001.BIN`–`IMG375.BIN`: 76,800-byte ($320 \times 240$) Mode 7 bitmap files.
 
-The build copies the ProDOS baseline, renames the volume, removes `BITSY.BOOT` and `QUIT.SYSTEM`, then uses Cadius to create `/DATA/` and `/DATA1/` through `/DATA3/` and add the app and asset files. Cadius allocates directory and data blocks and writes ProDOS metadata. The build changes each new subdirectory header's compatibility marker from `$76` to `$75`, which ProDOS 8 requires.
+Both builders use the bundled Cadius executable. The floppy builder copies the ProDOS baseline, renames the volume to `VERATEST`, removes non-boot files through Cadius, and adds the app files with their ProDOS types and auxiliary load addresses. The HDV builder copies its ProDOS baseline, renames the volume, removes `BITSY.BOOT` and `QUIT.SYSTEM`, then uses Cadius to create `/DATA/` and `/DATA1/` through `/DATA3/` and add the app and asset files. Cadius allocates directory and data blocks and writes ProDOS metadata. The HDV build changes each new subdirectory header's compatibility marker from `$76` to `$75`, which ProDOS 8 requires.
 
-`slideshow.asm` selects `/DATA1/`, `/DATA2/`, or `/DATA3/` from the image number, locates `VPALnnn.BIN` and `IMGnnn.BIN` through ProDOS directory entries, reads their seedling/sapling allocation metadata, and streams the allocated blocks with MLI `READ_BLOCK` directly into VERA. It does not assume image blocks are contiguous or load the 76,800-byte bitmap into Apple II RAM. Music streams continue to use MLI `OPEN`/`READ` from `/DATA/`. Cadius allocates blocks dynamically, so asset placement is not tied to fixed HDV block numbers.
+`slideshow.asm` selects `/DATA1/`, `/DATA2/`, or `/DATA3/` from the image number, locates `VPALnnn.BIN` and `IMGnnn.BIN` through ProDOS directory entries, reads their seedling/sapling allocation metadata, and streams those file-allocated blocks with MLI `READ_BLOCK` directly into VERA. It does not assume image blocks are contiguous or load the 76,800-byte bitmap into Apple II RAM. Music streams continue to use MLI `OPEN`/`READ` from `/DATA/`. Cadius allocates blocks dynamically, so asset placement is not tied to fixed HDV block numbers.
 
 File-level installation requires copying `DATA`, `DATA1`, `DATA2`, and `DATA3` alongside the app binaries. The loader follows the ProDOS prefix path, including when the app is installed in a nested directory on another volume.
 
@@ -189,7 +190,7 @@ Dual status reporting is provided for both single-monitor and multi-monitor setu
 9. **32MB ProDOS 2.4.3 Hard Disk Slideshow Showcase (`slideshow.hdv`)**:
    - Ported 375 Mode 7 ($320 \times 240$ 8bpp) fullscreen images and 375 custom palettes from Commander X16.
    - Packaged the 375 images, 375 palettes, and three music files into `/DATA/` with Cadius so ProDOS creates directory and file allocation metadata.
-   - Pure 6502 assembly ProDOS MLI Direct Block (`$80`) streaming engine (`src/slideshow/slideshow.asm`) with interactive keyboard controls (Space/Arrows=Next/Prev, A=Auto, R=Random, ESC=Exit) and zero-flicker palette transitions.
+   - Pure 6502 assembly file-level ProDOS streaming engine (`src/slideshow/slideshow.asm`) with interactive keyboard controls (Space/Arrows=Next/Prev, A=Auto, R=Random, ESC=Exit) and zero-flicker palette transitions.
    - Cadius-based HDV builder (`src/slideshow/slideshow_hdv.mjs`) and 560x384 preview generator (`src/slideshow/preview.mjs`).
 10. **Sprite Demos Complete VRAM & Attribute Clean Reset (`sprite.asm` / `spritesnd.asm`)**:
     - Eliminated ghost sprites and visual artifacts when launching Sprite Demo 1 and Demo 2 after running sprite-intensive titles (such as *Time Pilot*).
@@ -208,7 +209,7 @@ Dual status reporting is provided for both single-monitor and multi-monitor setu
     - Ported ZeroByte's Sega Genesis *Sonic The Hedgehog: Green Hill Zone* demo to the Apple II VERA expansion card.
     - Implemented dual-layer parallax scrolling with fractional background speed, Sonic running 4-frame hardware sprite animation with rolling ground bobbing dips (`Y_DIPS`), 4-color cycling water palette at `$1FA50`, and real-time sunflower VRAM tile swapping at `$0EB80`.
     - Integrated 60 Hz VERA VSYNC IRQ driving authentic 16-channel PSG Green Hill Zone polyphonic chiptune audio.
-    - Compacted all assets, palette, and PSG stream into a contiguous 103-block container (`SONIC.DAT`), streamed via ProDOS MLI in 512-byte blocks into VERA VRAM in under 1.5 seconds.
+    - Compacted all assets, palette, and PSG stream into one 103-block ProDOS file (`SONIC.DAT`), opened and streamed sequentially with MLI `OPEN`/`READ`/`CLOSE` in 512-byte chunks.
     - Fits comfortably on the 140KB floppy disk with 27 free blocks remaining, zero corruption to Apple II Zero Page or system vectors, and instantaneous text screen restoration on exit.
 13. **Direct Mode 7 Bitmap OSD Overlay, 5s Auto-Launcher & CANYON Volume Rebalance (`slideshow.asm` / `startup.bas` / `slideshow_hdv.mjs`)**:
     - Engineered high-performance graphics-mode On-Screen Display (OSD) overlay rendered directly into Mode 7 bitmap VRAM on Row 29 (bottom 8 scanlines, VRAM `$12200..$12BFF`).
@@ -226,6 +227,11 @@ Dual status reporting is provided for both single-monitor and multi-monitor setu
     - Restructured entry initialization (`START`): blanks VERA video (`VERA_DC_VID = 0`), silences all 16 PSG channels (`SILENCE_PSG`), clears shadows, loads image 1, and only then atomically turns on video output (`VERA_DC_VID = $11`) and enables 60 Hz music IRQ, completely resolving reboot freeze.
     - Preserved continuous 60 Hz music streaming across background image copy without pauses or stutter.
     - When Muted (`'M'`), the left `MUSIC:` badge is completely suppressed (`LEFT_BADGE_END = 0`), leaving columns 0..28 (232 pixels wide out of 320!) as 100% untouched original Mode 7 artwork, while blanking row 24 in Apple II text mode.
+
+16. **Cadius Packaging and File-Level Asset Access Across Both Targets**:
+    - Replaced the floppy builder's manual ProDOS directory, bitmap, and allocation writes with Cadius operations against the bootable ProDOS baseline; the output volume is named `VERATEST`.
+    - Bundled `tools/cadius.exe` and configured both floppy and HDV builders to use it by default, with `CADIUS` as an override.
+    - Sonic loads `SONIC.DAT` using ProDOS `OPEN`/`READ`/`CLOSE`. The slideshow resolves image and palette allocation through ProDOS catalog/index entries and reads those allocated blocks, without fixed physical block or contiguity assumptions.
 
 
 

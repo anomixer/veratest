@@ -46,7 +46,7 @@ Fully compatible with [AppleWin](https://github.com/anomixer/AppleWin) (with VER
 
 ## 🛠️ Modular Build System
 
-The Node.js toolchain compiles 6502 assembly and Applesoft BASIC from source. Building the slideshow HDV also requires Cadius (`cadius.exe`) available on `PATH`; set the `CADIUS` environment variable to its full path if needed.
+The Node.js toolchain compiles 6502 assembly and Applesoft BASIC from source. Both disk images are packaged with the bundled `tools/cadius.exe`. Set the `CADIUS` environment variable to use a different Cadius executable.
 
 ```bash
 # 1. Build standard 140KB bootable ProDOS floppy disk (veratest.po & veratest.png)
@@ -63,13 +63,14 @@ build.bat all
 
 ### 📂 Repository Structure
 - `assets/`: Authentic ProDOS 2.4.3 baseline floppy (`ProDOS 2.4.3.po`) and 32MB hard disk baseline (`ProDOS 2.4.3.hdv`).
+- `tools/cadius.exe`: Bundled ProDOS-aware utility used to package both disk images.
 - `src/`: Shared compiler infrastructure and hardware definitions:
   - `asm6502.mjs`: Standalone zero-dependency two-pass 6502 assembler.
   - `applebasic.mjs`: Standalone Applesoft BASIC tokenizer and memory-linked binary compiler.
   - `applebasic.inc`: Applesoft BASIC keyword token definitions.
   - `vera.inc`: VERA register offsets and Apple II hardware softswitch constants.
 - `src/veratest/`: Flagship 7-in-1 test suite & demo showcases:
-  - `veratest.mjs`: 140KB ProDOS 2.4.3 floppy builder & PNG renderer.
+  - `veratest.mjs`: Cadius-based 140KB ProDOS floppy packager & PNG renderer.
   - `startup.bas`: Applesoft BASIC dual-port hardware probe and launcher menu.
   - `sprite.asm`: 16-Sprite 4bpp bouncing alien animation.
   - `spritesnd.asm`: 16-Sprite + 4-voice polyphonic stereo PSG chiptune audio player.
@@ -81,7 +82,7 @@ build.bat all
   - `build_sonic_dat.mjs` & `sonic.dat`: Sonic asset packager, palette builder, and ZSM converter.
   - `rainbow_rle.mjs` & `preview.mjs`: RLE compressor and preview screenshot generator.
 - `src/slideshow/`: 32MB 375-Image Mode 7 ($320 \times 240$ 8bpp) Fullscreen Slideshow engine:
-  - `slideshow.asm`: Pure 6502 ProDOS MLI Direct Block ($80) streaming engine.
+  - `slideshow.asm`: Pure 6502 ProDOS file-level asset streaming engine.
   - `startup.bas`: Interactive BASIC launcher menu.
   - `slideshow_hdv.mjs`: 32MB hard disk image volume generator & PNG renderer.
   - `preview.mjs`: 560x384 PNG preview screenshot generator.
@@ -98,7 +99,9 @@ build.bat all
 /SLIDESHOW/DATA3/                VPAL251.BIN ... VPAL375.BIN and IMG251.BIN ... IMG375.BIN
 ```
 
-The slideshow selects `/DATA1`, `/DATA2`, or `/DATA3` from the image number, locates each image and palette in that ProDOS catalog, reads the file's seedling/sapling allocation metadata, then streams its allocated blocks with MLI `READ_BLOCK` directly to VERA. It does not assume image blocks are contiguous or load a 76,800-byte image into Apple II RAM. Music files use MLI `OPEN`/`READ` from `/DATA`. Cadius allocates file blocks dynamically, so asset placement is not tied to fixed HDV blocks. The generated ProDOS 8 subdirectory headers are adjusted to use the `$75` compatibility marker required by ProDOS 8.
+Both packaged images use Cadius for ProDOS file/catalog allocation. The 7-in-1 floppy's programs, launcher, and `SONIC.DAT` are ordinary ProDOS files; Sonic opens its data container with MLI `OPEN`/`READ`/`CLOSE`. The slideshow selects `/DATA1`, `/DATA2`, or `/DATA3` from the image number and resolves each palette and image through its ProDOS directory entry and seedling/sapling index. It then uses MLI `READ_BLOCK` on those file-allocated blocks to stream the 76,800-byte image directly to VERA without loading it into Apple II RAM. Music uses MLI `OPEN`/`READ` from `/DATA`. Neither program relies on fixed physical block numbers or contiguous allocation. The generated ProDOS 8 subdirectory headers are adjusted to use the `$75` compatibility marker required by ProDOS 8.
+
+To install the 7-in-1 suite on another ProDOS volume, copy `STARTUP`, all demo `.BIN` files, and `SONIC.DAT` into the same target directory, then launch `STARTUP` with that directory as the ProDOS prefix. The floppy builder preserves `PRODOS` and `BASIC.SYSTEM` from its bootable baseline and uses Cadius to remove other baseline utilities and add the generated app files.
 
 For file-level installation on another ProDOS volume, copy the slideshow files and all four directories (`DATA`, `DATA1`, `DATA2`, and `DATA3`) together. The loader follows the active ProDOS prefix, so the app can run from a nested directory such as `/VERASD/SLIDESHOW/`.
 
