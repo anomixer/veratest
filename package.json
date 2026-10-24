@@ -1,7 +1,7 @@
 {
   "name": "veratest",
   "version": "1.0.0",
-  "description": "VERA Graphics & 4-Voice PSG Sound Demo Disk for Apple II / Apple2TS",
+  "description": "VERA Graphics & PSG + YM2151 FM Sound Demo Disk for Apple II / Apple2TS",
   "type": "module",
   "main": "src/veratest/veratest.mjs",
   "scripts": {
@@ -17,6 +17,8 @@
     "commander-x16",
     "6502",
     "chiptune",
+    "ym2151",
+    "fm-synthesis",
     "prodos",
     "fpga"
   ],

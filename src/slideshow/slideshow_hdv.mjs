@@ -5,6 +5,7 @@ import { execFileSync } from "child_process"
 import { fileURLToPath } from "url"
 import { assembleAsmFile } from "../asm6502.mjs"
 import { compileApplesoftBasic } from "../applebasic.mjs"
+import { buildMusicStreams } from "../music_streams.mjs"
 import { generateSlideshowPreviewPng } from "./preview.mjs"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -14,88 +15,21 @@ const slideshowDir = path.resolve(srcDir, "slideshow")
 const x16SlideshowDataDir = path.resolve(slideshowDir, "data")
 const baseHdvPath = path.resolve(projectRoot, "assets/ProDOS 2.4.3.hdv")
 
-// Convert the X16 ZSM stream to the compact VERA-PSG stream consumed by the
-// Apple II player. YM2151 commands are ignored because Apple2TS exposes the
-// VERA PSG, not the X16 FM chip.
+// Convert the X16 ZSM streams (VERA PSG + YM2151 FM) into the compact "VZM"
+// stream consumed by the Apple II player.  Both the PSG and the FM portions are
+// preserved: the player detects the optional FM daughterboard at run time and
+// simply skips the $C0-$DF FM batches when no YM2151 is installed.
 const MUSIC_NAMES = ["SB-INTRO", "CANYON", "GREENHILL"]
-const MUSIC_FILES = ["SBINTRO.PSG", "CANYON.PSG", "GREENHILL.PSG"]
-const PSG_SOURCE_FILES = ["sb-intro.psg", "canyon.psg", "greenhill.psg"]
+const MUSIC_FILES = ["SBINTRO.VZM", "CANYON.VZM", "GREENHILL.VZM"]
 const BLOCK_SIZE = 512
-const compileZsmStream = (name) => {
-  const raw = fs.readFileSync(path.resolve(x16SlideshowDataDir, `${name}.ZSM`))
-  const psgPath = path.resolve(x16SlideshowDataDir, PSG_SOURCE_FILES[MUSIC_NAMES.indexOf(name)])
-  const stream = []
-  let ptr = 16
 
-  while (ptr < raw.length) {
-    const command = raw[ptr++]
-
-    if (command < 0x40) {
-      let value = raw[ptr++]
-
-      // Volume register balancing for CANYON:
-      // Voice 8 (Noise percussion) was overpoweringly loud compared to the melodic voices.
-      // Adjust balance so the percussion sits nicely in the mix without drowning out the melody.
-      if (name === "CANYON" && (command % 4 === 2)) {
-        const voice = Math.floor(command / 4)
-        const pan = value & 0xC0
-        let vol = value & 0x3F
-        if (voice === 8) {
-          vol = Math.round(vol * 0.55) // Attenuate loud noise percussion
-        } else {
-          vol = Math.min(63, Math.round(vol * 1.30)) // Boost melodic voices
-        }
-        value = pan | vol
-      }
-
-      // Keep two-byte PSG writes inside one 512-byte disk block so the
-      // 6502 streaming player never has to handle a split record.
-      if ((stream.length & 0x1FF) === 0x1FF) stream.push(0)
-      stream.push(0x80 | command, value)
-      continue
-    }
-
-    if (command === 0x40) {
-      // EXTCMD: the following byte contains the extension channel and the
-      // number of payload bytes.  The Apple II port has no PCM/FM extension.
-      const ext = raw[ptr++]
-      ptr += ext & 0x3F
-      continue
-    }
-
-    if (command < 0x80) {
-      // FM write: low six bits specify the number of register/value pairs.
-      // Skip the complete batch; consuming only one pair desynchronizes the
-      // stream and produces the exact delayed garbage heard in the port.
-      ptr += (command & 0x3F) * 2
-      continue
-    }
-
-    if (command === 0x80) break
-
-    // Delay commands encode 1..127 ticks as 0x81..0xFF.  The compact player
-    // stores the remaining tick count, so subtract one from each chunk.
-    let delay = command & 0x7F
-    while (delay > 0) {
-      const chunk = Math.min(delay, 127)
-      stream.push(chunk - 1)
-      delay -= chunk
-    }
+const musicTracks = buildMusicStreams()
+const musicStreams = MUSIC_NAMES.map((name, index) => {
+  const track = musicTracks.find(t => t.name === name)
+  if (!track || track.data.length % BLOCK_SIZE !== 0) {
+    throw new Error(`Music stream for ${name} is missing or not block padded`)
   }
-
-  stream.push(0xFF)
-  // The 6502 player reads the PSG file as exact 512-byte MLI blocks. Keep the
-  // end marker, then pad the final ProDOS block so the last READ is full-sized
-  // instead of returning an EOF/short-read error before the marker is decoded.
-  while (stream.length % BLOCK_SIZE !== 0) stream.push(0x00)
-  fs.writeFileSync(psgPath, Buffer.from(stream))
-  return { data: Buffer.from(stream), path: psgPath }
-}
-
-const musicStreams = MUSIC_NAMES.map(name => {
-  const result = compileZsmStream(name)
-  console.log(`  🎵 Converting ${name}.ZSM to VERA PSG stream (${result.data.length} bytes)...`)
-  return result.data
+  return track.data
 })
 
 console.log("🚀 Building 32MB ProDOS 2.4.3 Slideshow Hard Disk Image with Cadius...")
@@ -139,6 +73,14 @@ generatePaletteLut()
 console.log("  ⚙️ Compiling SLIDESHOW.BIN (Slot 2 & Slot 4)...")
 const slideshow2 = assembleAsmFile(slideshowDir, "slideshow.asm", 2, 0x2000)
 const slideshow4 = assembleAsmFile(slideshowDir, "slideshow.asm", 4, 0x2000)
+// The binary is loaded at $2000 and must not reach the runtime block buffer at
+// $3C00 (DATA_BUF); keep that invariant checked at build time.
+const SLIDESHOW_LOAD_LIMIT = 0x3c00
+for (const [name, binary] of [["SLIDESHOW.BIN", slideshow2], ["SLIDSHW4.BIN", slideshow4]]) {
+  if (0x2000 + binary.length > SLIDESHOW_LOAD_LIMIT) {
+    throw new Error(`${name} ends at $${(0x2000 + binary.length).toString(16)} but must stay below $${SLIDESHOW_LOAD_LIMIT.toString(16)}`)
+  }
+}
 
 // 2. Compile Applesoft BASIC Startup Menu
 console.log("  ⚙️ Compiling STARTUP BASIC script...")

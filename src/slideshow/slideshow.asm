@@ -1,8 +1,9 @@
 ; ==============================================================================
 ; 256-Color Fullscreen Slideshow Engine for Apple II (VERA Card + ProDOS)
 ; ProDOS MLI direct-block streaming engine for image assets; file MLI for music
-; Supports: 375 320x240 8bpp Bitmaps + 375 Custom Palettes + 8 PSG soundtracks
-; Controls: Space/Right=Next, Left=Prev, A=Auto, R=Random, M=Mute, ESC=Exit
+; Supports: 375 320x240 8bpp Bitmaps + 375 Custom Palettes + 3 PSG+FM tracks
+; Music: X16 ZSM streams (VERA PSG + YM2151 FM when the chip is present)
+; Controls: Space/Right=Next, Left/Prev, A=Auto, R=Random, M=Mute, ESC=Exit
 ; ==============================================================================
 
 * = $2000
@@ -45,11 +46,32 @@ PATH_SRC_PTR_H  = $31
 PATH_SRC_IDX    = $32
 PATH_CHAR       = $33
 DIR_PTR         = $34       ; Zero-page pointer for ProDOS directory entries
+FM_PRESENT      = $0C       ; 1 = YM2151 FM chip detected
+FM_COUNT        = $0D       ; Remaining register pairs in the current FM batch
+FM_MUSIC_MODE   = $2A       ; Text/OSD indicator character ('F' = FM, 'P' = PSG)
+MUSIC_ACTIVE    = $2B       ; 0 = playing from MUSIC_BUF_A, 1 = MUSIC_BUF_B
+MUSIC_NEXT_READY = $2C      ; 1 = the inactive buffer holds the next block
+MUSIC_END_H     = $2D       ; High byte just past the active 512-byte block
+MUSIC_MID_H     = $2E       ; High byte of the active block's midpoint
 
-DATA_BUF    = $3800     ; 512-Byte ProDOS Block Buffer ($3800 ~ $39FF)
+DATA_BUF    = $3C00     ; 512-Byte ProDOS Block Buffer ($3C00 ~ $3DFF)
 PATH_BUF    = $5A00     ; 64-byte ProDOS pathname buffer
 FILE_IO_BUF = $6000     ; 1 KB page-aligned ProDOS OPEN buffer
 INDEX_BUF   = $5B00     ; Copy of an image's 512-byte sapling index block
+MUSIC_BUF_A = $4000     ; 512-byte music stream block (buffer A)
+MUSIC_BUF_B = $4200     ; 512-byte music stream block (buffer B)
+FM_KEYS     = $4400     ; Last YM2151 $08 (key on/off) value per channel
+; Master-volume scratch: the IRQ decoder, the mute/unmute restore and the +/- key
+; handler all scale PSG volume registers through the same working bytes.
+VOL_SAVEX   = $4408     ; Saved X (PSG register index) across SCALE_PSG_VOL
+VOL_TMP     = $4409     ; Unscaled PSG volume byte
+VOL_PAN     = $440A     ; Pan bits ($C0) of that byte
+VOL_PROD    = $440B     ; value * volume, low byte
+VOL_PROD_H  = $440C     ; value * volume, high byte
+VOL_PROD_V  = $440D     ; Value being multiplied
+FM_ATTEN    = $440E     ; YM2151 total-level attenuation steps for this volume
+MUSIC_VOL   = $440F     ; Master volume 0..15 (default 12), adjusted by '+/-'
+FM_TL_BASE  = $3B30     ; Base YM2151 TL values ($60..$7F), mirroring the chip
 
 START:
     ; BRUN has no caller state to return to, so STARTUP loads this binary and
@@ -89,6 +111,19 @@ SAVE_BASIC_ZP:
     JSR SILENCE_PSG
     JSR CLEAR_PSG_SHADOW
 
+    ; 3b. Detect the YM2151 FM chip ($Cs20/$Cs21) and clear
+    ; its registers. The music streams carry both the PSG and the FM parts;
+    ; when no FM chip answers the player simply skips FM batches and
+    ; the PSG part still plays exactly as in the PSG-only version.
+    JSR VERA_FM_DETECT
+    JSR VERA_FM_RESET
+    LDA #$D0            ; 'P' (PSG only)
+    LDX FM_PRESENT
+    BEQ FM_MODE_READY
+    LDA #$C6            ; 'F' (PSG + FM)
+FM_MODE_READY:
+    STA FM_MUSIC_MODE
+
     ; 4. Initialize State Variables
     LDA #$01
     STA CURRENT_IMG
@@ -114,6 +149,16 @@ SAVE_BASIC_ZP:
     STA MUSIC_PREFETCH_DONE
     STA MUSIC_HOLD
 
+    ; Master volume: 0..15, default 12 (the +/- keys change it at run time).
+    ; FM total levels can only be attenuated, so the table holds the number of
+    ; TL steps to add for each volume; 0 means "unchanged" at full volume.
+    LDA #12
+    STA MUSIC_VOL
+    LDX #12
+    LDA FM_ATTEN_TAB,X
+    STA FM_ATTEN
+    JSR RESET_FM_TL_SHADOW
+
     ; 5. Configure Layer 0: Bitmap Mode (Color depth 8bpp = 3, Bitmap Mode = 1 << 2 = 4) -> $07
     LDA #$07
     STA VERA_L0_CFG
@@ -134,6 +179,7 @@ SAVE_BASIC_ZP:
     JSR INIT_CANYON_MUSIC
     JSR LOAD_CANYON_MUSIC
     JSR UPDATE_MUSIC_NAME
+    JSR UPDATE_VOLUME_TEXT
 
     ; 7. Initial Load of Image 1 and Palette 1
     ; (Interrupts remain disabled so MLI disk streaming is completely atomic!)
@@ -211,6 +257,16 @@ PROCESS_KEY:
     CMP #$6E
     BEQ MUSIC_NEXT_JMP
 
+    ; '+'/'=' and '-'/'_' -> master volume (0..15)
+    CMP #$2B
+    BEQ VOLUME_UP_JMP
+    CMP #$3D
+    BEQ VOLUME_UP_JMP
+    CMP #$2D
+    BEQ VOLUME_DOWN_JMP
+    CMP #$5F
+    BEQ VOLUME_DOWN_JMP
+
     ; Space ($20), Right Arrow ($15), Down Arrow ($0A) -> Next Image
     CMP #$20
     BEQ GOTO_NEXT_JMP
@@ -248,12 +304,17 @@ GOTO_NEXT_JMP:
     JMP GOTO_NEXT
 GOTO_PREV_JMP:
     JMP GOTO_PREV
+VOLUME_UP_JMP:
+    JMP VOLUME_UP
+VOLUME_DOWN_JMP:
+    JMP VOLUME_DOWN
 
 DO_EXIT:
     ; Clean up and return to ProDOS BASIC
     JSR DISABLE_MUSIC_IRQ
     JSR CLOSE_MUSIC_FILE
     JSR SILENCE_PSG
+    JSR VERA_FM_KEY_OFF_ALL
     LDA #$00
     STA VERA_DC_VID     ; Disable VERA display
     ; Our zero-page scratch variables overlap the Apple II ROM's text-window
@@ -317,9 +378,11 @@ TOGGLE_MUTE:
     LDA MUSIC_MUTE
     BNE MUTE_PSG
     JSR RESTORE_PSG_FROM_SHADOW
+    JSR VERA_FM_RESTORE_KEYS
     JMP MAIN_LOOP
 MUTE_PSG:
     JSR SILENCE_PSG
+    JSR VERA_FM_KEY_OFF_ALL
     JMP MAIN_LOOP
 
 TOGGLE_AUTO:
@@ -360,6 +423,189 @@ GOTO_PREV:
     JSR RESET_AUTO_TIMER
     STA KBD_STROBE
     JMP MAIN_LOOP
+
+; ==============================================================================
+; Master volume: 0..15, default 12, adjusted with '+'/'=' and '-'/'_'
+; ==============================================================================
+VOLUME_UP:
+    LDA MUSIC_VOL
+    CMP #$0F
+    BCS VOLUME_DONE
+    INC MUSIC_VOL
+    JMP VOLUME_CHANGED
+VOLUME_DOWN:
+    LDA MUSIC_VOL
+    BEQ VOLUME_DONE
+    DEC MUSIC_VOL
+VOLUME_CHANGED:
+    JSR APPLY_VOLUME
+VOLUME_DONE:
+    JMP MAIN_LOOP
+
+APPLY_VOLUME:
+    ; Re-send every voice with the new volume: PSG volume registers are scaled
+    ; from PSG_SHADOW, YM2151 total levels are attenuated from FM_TL_BASE.
+    LDA MUSIC_VOL
+    TAX
+    LDA FM_ATTEN_TAB,X
+    STA FM_ATTEN
+    LDA MUSIC_MUTE
+    BNE APPLY_VOLUME_UI       ; muted: leave the voices silent
+    SEI
+    JSR RESTORE_PSG_FROM_SHADOW
+    JSR FM_APPLY_VOLUME
+    CLI
+APPLY_VOLUME_UI:
+    JSR UPDATE_VOLUME_TEXT
+    LDA #$01
+    STA OSD_DIRTY
+    RTS
+
+; Scale a PSG volume byte (pan bits 7..6 preserved, volume bits 5..0 scaled)
+; by MUSIC_VOL. In: A = value, X = PSG register index (preserved).
+SCALE_PSG_VOL:
+    STX VOL_SAVEX
+    STA VOL_TMP
+    AND #$C0
+    STA VOL_PAN
+    LDA MUSIC_VOL
+    CMP #$0F
+    BCS SCALE_PSG_FULL        ; full volume: leave the value alone
+    STA VOL_PROD_V            ; multiplier = volume
+    LDA #$08                  ; start with +8 for rounding
+    STA VOL_PROD
+    LDA #$00
+    STA VOL_PROD_H
+    LDA VOL_TMP
+    AND #$3F
+    STA VOL_TMP
+    LDX VOL_PROD_V
+    BEQ SCALE_PSG_ZERO        ; volume 0: silent, keep the pan bits only
+SCALE_PSG_LOOP:
+    CLC
+    LDA VOL_PROD
+    ADC VOL_TMP
+    STA VOL_PROD
+    BCC SCALE_PSG_NEXT
+    INC VOL_PROD_H
+SCALE_PSG_NEXT:
+    DEX
+    BNE SCALE_PSG_LOOP
+    ; (value * volume + 8) >> 4, assembled from the two product bytes so the
+    ; shift stays in the accumulator (no zero-page shift instructions needed).
+    LDA VOL_PROD_H
+    ASL
+    ASL
+    ASL
+    ASL
+    STA VOL_TMP
+    LDA VOL_PROD
+    LSR
+    LSR
+    LSR
+    LSR
+    ORA VOL_TMP
+    STA VOL_TMP
+    JMP SCALE_PSG_COMBINE
+SCALE_PSG_ZERO:
+    LDA #$00
+    STA VOL_TMP
+SCALE_PSG_COMBINE:
+    LDA VOL_TMP
+    ORA VOL_PAN
+    LDX VOL_SAVEX
+    RTS
+SCALE_PSG_FULL:
+    LDA VOL_TMP
+    LDX VOL_SAVEX
+    RTS
+
+; Add FM_ATTEN to a YM2151 total-level value and saturate at $7F.
+; The OPM total level is a 7-bit field (ymfm_opm.h: op_total_level reads
+; bitfield(0x60, 0, 7)), so bit 7 must be masked off *before* the level is
+; scaled. The ZSM streams leave it set in places ($8A, $94, $9D ...), and the
+; chip ignores it; the earlier code compared the raw byte against $80 instead
+; and clamped every one of those to $7F -- maximum attenuation, i.e. silence.
+; GREENHILL writes such levels on its carriers from the first tick, which is
+; why its FM half went missing while the other tracks still had FM.
+; In: A = base TL; out: A = attenuated TL.
+FM_ATTENUATE:
+    AND #$7F
+    CLC
+    ADC FM_ATTEN
+    CMP #$80
+    BCC FM_ATTENUATE_DONE
+    LDA #$7F
+FM_ATTENUATE_DONE:
+    RTS
+
+; Rewrite every YM2151 total level from FM_TL_BASE with the current attenuation.
+; All 32 operator levels are written because the chip's power-on/reset value is
+; 0 (loudest) and the stream only rewrites the levels it actually changes.
+FM_APPLY_VOLUME:
+    LDA FM_PRESENT
+    BEQ FM_APPLY_DONE
+    LDX #$00
+FM_APPLY_LOOP:
+    TXA
+    CLC
+    ADC #$60                  ; $60..$7F = operator total levels
+    STA YM_REG
+    LDA FM_TL_BASE,X
+    JSR FM_ATTENUATE
+    STA YM_DATA
+    INX
+    CPX #$20
+    BCC FM_APPLY_LOOP
+FM_APPLY_DONE:
+    RTS
+
+; Reset the base total levels to zero (called at start and on every track change,
+; right after VERA_FM_RESET has zeroed the chip, so the mirror stays in step).
+RESET_FM_TL_SHADOW:
+    LDA #$00
+    LDX #$00
+RESET_FM_TL_LOOP:
+    STA FM_TL_BASE,X
+    INX
+    CPX #$20
+    BCC RESET_FM_TL_LOOP
+    RTS
+
+; Volume readout on the Apple II text page, row 24 cols 16..22: " VOL:nn"
+UPDATE_VOLUME_TEXT:
+    LDA #$A0            ; space (separates it from the " F"/" P" mode char)
+    STA $07E0
+    LDA #$D6            ; V
+    STA $07E1
+    LDA #$CF            ; O
+    STA $07E2
+    LDA #$CC            ; L
+    STA $07E3
+    LDA #$BA            ; :
+    STA $07E4
+    LDA MUSIC_VOL
+    LDY #$2F            ; '0' - 1
+UPDATE_VOL_TENS:
+    INY
+    SEC
+    SBC #$0A
+    BCS UPDATE_VOL_TENS
+    ADC #$BA            ; ones digit with the high bit set
+    STA $07E6
+    TYA
+    ORA #$80
+    STA $07E5
+    RTS
+
+; ==============================================================================
+; Per-volume YM2151 total-level attenuation, matched to the PSG amplitude law
+; (PSG level scales as volume/16, i.e. 20*log10(v/16) dB) so both halves of the
+; mix move together: 15 -> 0 steps (as authored), 12 -> 3 (~2.25 dB, default),
+; 0 -> 127 (silent). One TL step is 0.75 dB on the OPM.
+; ==============================================================================
+FM_ATTEN_TAB:
+    !byte 127, 32, 24, 19, 16, 14, 11, 10, 8, 7, 5, 4, 3, 2, 2, 0
 
 CHK_AUTO:
     LDA AUTO_MODE
@@ -885,11 +1131,17 @@ IMAGE_TENS_DONE:
 
 INIT_CANYON_MUSIC:
     JSR CLEAR_PSG_SHADOW
-    LDA #<$4000
+    LDA #<MUSIC_BUF_A
     STA MUSIC_PTR_L
-    LDA #>$4000
+    LDA #>MUSIC_BUF_A
     STA MUSIC_PTR_H
+    LDA #$41
+    STA MUSIC_MID_H
+    LDA #$42
+    STA MUSIC_END_H
     LDA #$00
+    STA MUSIC_ACTIVE
+    STA MUSIC_NEXT_READY
     STA MUSIC_DELAY
     STA MUSIC_MUTE
     STA MUSIC_INDEX
@@ -956,20 +1208,33 @@ MUSIC_SELECT:
     ; Reset all voices so the previous soundtrack cannot leave residual notes.
     JSR SILENCE_PSG
     JSR CLEAR_PSG_SHADOW
-    LDA #<$4000
+    ; The FM stream is compressed against an all-zero YM2151 state, so the chip
+    ; must be cleared here too before the first record of the new track.
+    JSR VERA_FM_RESET
+    JSR RESET_FM_TL_SHADOW
+    LDA #<MUSIC_BUF_A
     STA MUSIC_PTR_L
-    LDA #>$4000
+    LDA #>MUSIC_BUF_A
     STA MUSIC_PTR_H
     LDA #$00
     STA MUSIC_DELAY
     JSR LOAD_CANYON_MUSIC
     JSR UPDATE_MUSIC_NAME
+    JSR UPDATE_VOLUME_TEXT
+    ; The first block is buffered at MUSIC_BUF_A; ask for block 1 immediately.
+    LDA #$41
+    STA MUSIC_MID_H
+    LDA #$42
+    STA MUSIC_END_H
     LDA #$00
-    STA MUSIC_REFILL_PENDING
+    STA MUSIC_ACTIVE
+    STA MUSIC_NEXT_READY
     STA MUSIC_CHANGE_PENDING
     STA MUSIC_WAITING
     STA MUSIC_PREFETCH_DONE
     STA MUSIC_HOLD
+    LDA #$01
+    STA MUSIC_REFILL_PENDING
     RTS
 
 MUSIC_NEXT_KEY:
@@ -1045,10 +1310,11 @@ MUSIC_IRQ_DONE:
     RTI
 
 SERVICE_MUSIC_REQUESTS:
-    ; Never call ProDOS MLI from the IRQ handler. During a music file change,
-    ; MUSIC_HOLD keeps the IRQ from touching stream state while MLI is active.
-    ; Music setup also writes VERA registers, so preserve the foreground's
-    ; current VERA address while servicing a request between image blocks.
+    ; Never call ProDOS MLI from the IRQ handler. A refill fills the buffer
+    ; that is not playing, and a track change keeps MUSIC_HOLD set while MLI
+    ; is active. Music setup also writes VERA registers, so preserve the
+    ; foreground's current VERA address while servicing a request between
+    ; image blocks.
     LDA VERA_CTRL
     STA SERVICE_VERA_CTRL
     LDA VERA_ADDR_L
@@ -1061,7 +1327,7 @@ SERVICE_MUSIC_REQUESTS:
     BNE SERVICE_MUSIC_RESTORE
     LDA MUSIC_REFILL_PENDING
     BEQ SERVICE_MUSIC_TRACK
-    JSR REFILL_CANYON_BUFFER
+    JSR REFILL_MUSIC_BUFFER
     JMP SERVICE_MUSIC_RESTORE
 SERVICE_MUSIC_TRACK:
     LDA MUSIC_CHANGE_PENDING
@@ -1087,40 +1353,128 @@ TICK_MUSIC:
 TICK_MUSIC_NOT_MUTED:
     LDA MUSIC_HOLD
     BEQ TICK_MUSIC_NOT_HELD
+    LDA MUSIC_DELAY
+    BNE TICK_MUSIC_RET
     RTS
 TICK_MUSIC_NOT_HELD:
     LDA MUSIC_CHANGE_PENDING
     BEQ TICK_MUSIC_NOT_CHANGING
+    LDA MUSIC_DELAY
+    BNE TICK_MUSIC_RET
     RTS
 TICK_MUSIC_NOT_CHANGING:
+    ; The stream is double-buffered.  As soon as the active block pointer
+    ; passes its midpoint, ask the foreground to read the next 512-byte block
+    ; into the *other* buffer, so the switch at the end of the block never
+    ; waits for the disk and never costs a music tick.
+    LDA MUSIC_NEXT_READY
+    BNE TICK_MUSIC_END_CHECK
     LDA MUSIC_PTR_H
-    CMP #$42
-    BCC MUSIC_BUFFER_READY
+    CMP MUSIC_MID_H
+    BCC TICK_MUSIC_END_CHECK
     LDA #$01
     STA MUSIC_REFILL_PENDING
-    RTS
-MUSIC_BUFFER_READY:
+TICK_MUSIC_END_CHECK:
+    LDA MUSIC_PTR_H
+    CMP MUSIC_END_H
+    BCS TICK_MUSIC_AT_END
     LDA MUSIC_DELAY
-    BEQ MUSIC_DECODE
+    BNE TICK_MUSIC_DEC_DELAY
+    JMP MUSIC_DECODE
+TICK_MUSIC_DEC_DELAY:
     DEC MUSIC_DELAY
     RTS
-MUSIC_DECODE:
-    ; A block boundary can be reached while decoding several PSG writes in
-    ; one tick.  Refill before the next command, not only at TICK_MUSIC entry.
-    ; Otherwise the indirect read would consume stale bytes past $41FF.
-    LDA MUSIC_PTR_H
-    CMP #$42
-    BCC MUSIC_DECODE_READY
+TICK_MUSIC_AT_END:
+    JSR MUSIC_SWITCH_BLOCK
+    BCS TICK_MUSIC_STALLED
+    JMP TICK_MUSIC_READY
+TICK_MUSIC_STALLED:
+    LDA MUSIC_DELAY
+    BNE TICK_MUSIC_DEC_DELAY
+    RTS
+TICK_MUSIC_READY:
+    LDA MUSIC_DELAY
+    BNE TICK_MUSIC_DEC_DELAY
+    JMP MUSIC_DECODE
+TICK_MUSIC_RET:
+    RTS
+
+; Switch the decoder to the prefetched buffer.
+;   C=0: switched, MUSIC_PTR points at the start of the other buffer
+;   C=1: the other buffer is still being filled, caller must wait a frame
+MUSIC_SWITCH_BLOCK:
+    LDA MUSIC_NEXT_READY
+    BEQ MUSIC_SWITCH_STALL
+    LDA #$00
+    STA MUSIC_NEXT_READY
+    LDA MUSIC_ACTIVE
+    EOR #$01
+    STA MUSIC_ACTIVE
+    BNE MUSIC_SWITCH_B
+    LDA #$00
+    STA MUSIC_PTR_L
+    LDA #$40
+    STA MUSIC_PTR_H
+    LDA #$41
+    STA MUSIC_MID_H
+    LDA #$42
+    STA MUSIC_END_H
+    JMP MUSIC_SWITCH_OK
+MUSIC_SWITCH_B:
+    LDA #$00
+    STA MUSIC_PTR_L
+    LDA #$42
+    STA MUSIC_PTR_H
+    LDA #$43
+    STA MUSIC_MID_H
+    LDA #$44
+    STA MUSIC_END_H
+MUSIC_SWITCH_OK:
     LDA #$01
     STA MUSIC_REFILL_PENDING
+    CLC
+    RTS
+MUSIC_SWITCH_STALL:
+    LDA #$01
+    STA MUSIC_REFILL_PENDING
+    SEC
+    RTS
+
+MUSIC_DECODE:
+    ; A block boundary can be reached while decoding several records in one
+    ; tick. Switch to the prefetched buffer and keep decoding, so the tick is
+    ; not split; only fall back to waiting when the prefetch has not finished.
+    LDA MUSIC_PTR_H
+    CMP MUSIC_END_H
+    BCC MUSIC_DECODE_READY
+    JSR MUSIC_SWITCH_BLOCK
+    BCS MUSIC_STALL_MID_TICK
+    JMP MUSIC_DECODE
+MUSIC_STALL_MID_TICK:
     RTS
 MUSIC_DECODE_READY:
     LDY #$00
     LDA (MUSIC_PTR_L),Y
     CMP #$FF
-    BEQ MUSIC_RESTART
+    BNE MUSIC_CHK_80
+    JMP MUSIC_RESTART
+MUSIC_CHK_80:
     CMP #$80
-    BCC MUSIC_SET_DELAY
+    BCS MUSIC_CHK_C0
+    JMP MUSIC_SET_DELAY
+MUSIC_CHK_C0:
+    CMP #$C0
+    BCS MUSIC_CHK_E0
+    JMP MUSIC_PSG_WRITE
+MUSIC_CHK_E0:
+    CMP #$E0
+    BCS MUSIC_NOP_PAD
+    JMP MUSIC_FM_BATCH
+MUSIC_NOP_PAD:
+    ; $E0-$FE: block alignment no-op, consumes no tick (not a delay).
+    JSR MUSIC_ADVANCE_1
+    JMP MUSIC_DECODE
+MUSIC_PSG_WRITE:
     AND #$3F
     TAX
     CLC
@@ -1134,8 +1488,82 @@ MUSIC_DECODE_READY:
     LDY #$01
     LDA (MUSIC_PTR_L),Y
     STA PSG_SHADOW,X
+    ; Volume registers (offset +2 of each voice) carry pan in bits 7..6 and the
+    ; level in bits 5..0: the shadow keeps the stream value, VERA gets it scaled.
+    TXA
+    AND #$03
+    CMP #$02
+    BNE MUSIC_PSG_PLAIN
+    LDA PSG_SHADOW,X
+    JSR SCALE_PSG_VOL
+    JMP MUSIC_PSG_STORE
+MUSIC_PSG_PLAIN:
+    LDA PSG_SHADOW,X
+MUSIC_PSG_STORE:
     STA VERA_DATA0
     JSR MUSIC_ADVANCE_2
+    JMP MUSIC_DECODE
+MUSIC_FM_BATCH:
+    ; $C0-$DF: (count - 1) in the low five bits, then count YM2151 pairs.
+    ; The converter guarantees the whole batch lives inside one 512-byte block.
+    AND #$1F
+    CLC
+    ADC #$01            ; stored value is count-1: recover the real pair count
+    STA FM_COUNT
+    JSR MUSIC_ADVANCE_1
+    LDA FM_PRESENT
+    BEQ MUSIC_FM_SKIP
+MUSIC_FM_WRITE:
+    LDY #$00
+    LDA (MUSIC_PTR_L),Y
+    STA YM_REG
+    CMP #$08
+    BNE MUSIC_FM_PLAIN
+    ; Key on/off register: remember the value per channel for mute/unmute.
+    JSR MUSIC_ADVANCE_1
+    LDY #$00
+    LDA (MUSIC_PTR_L),Y
+    PHA
+    AND #$07
+    TAY
+    PLA
+    STA FM_KEYS,Y
+    STA YM_DATA
+    JSR MUSIC_ADVANCE_1
+    JMP MUSIC_FM_NEXT
+MUSIC_FM_PLAIN:
+    ; A still holds the register byte that was just written to YM_REG; keep it
+    ; before advancing, because the FM aperture cannot be read back.
+    STA VOL_TMP
+    JSR MUSIC_ADVANCE_1
+    LDY #$00
+    LDA (MUSIC_PTR_L),Y
+    ; YM2151 total levels ($60..$7F) follow the master volume. The stream value
+    ; is kept as the base so a later '+'/'-' can recompute the attenuation.
+    LDX VOL_TMP
+    CPX #$60
+    BCC MUSIC_FM_STORE
+    CPX #$80
+    BCS MUSIC_FM_STORE
+    PHA
+    TXA
+    AND #$1F
+    TAX
+    PLA
+    STA FM_TL_BASE,X
+    JSR FM_ATTENUATE
+MUSIC_FM_STORE:
+    STA YM_DATA
+    JSR MUSIC_ADVANCE_1
+MUSIC_FM_NEXT:
+    DEC FM_COUNT
+    BNE MUSIC_FM_WRITE
+    JMP MUSIC_DECODE
+MUSIC_FM_SKIP:
+    ; No FM chip: drop the batch payload without touching $Cs20/$Cs21.
+    JSR MUSIC_ADVANCE_2
+    DEC FM_COUNT
+    BNE MUSIC_FM_SKIP
     JMP MUSIC_DECODE
 MUSIC_SET_DELAY:
     STA MUSIC_DELAY
@@ -1219,34 +1647,77 @@ MUSIC_NAME_COPY:
     INY
     CPY #$09
     BCC MUSIC_NAME_COPY
-    LDA #$A0              ; clear 10th char
+    LDA FM_MUSIC_MODE     ; 'F' (PSG+FM) or 'P' (PSG only)
     STA $07DF
     LDA #$01
     STA OSD_DIRTY
     RTS
 
-REFILL_CANYON_BUFFER:
-    LDA #$01
-    STA MUSIC_HOLD
-    LDA #<$4000
-    STA CANYON_BUF_PTR
-    LDA #>$4000
-    STA CANYON_BUF_PTR+1
-    LDA #<$4000
-    STA FILE_BUF_PTR
-    LDA #>$4000
-    STA FILE_BUF_PTR+1
-    JSR READ_MUSIC_BLOCK
-    BCC REFILL_READ_OK
-    JMP CANYON_LOAD_FAIL
-REFILL_READ_OK:
+REFILL_MUSIC_BUFFER:
+    ; Read the next 512-byte block into the buffer that is not being played.
+    ; MUSIC_HOLD stays clear, so the VSYNC IRQ keeps decoding the active
+    ; buffer while this MLI read runs and no music tick is lost.
+    LDA MUSIC_NEXT_READY
+    BEQ REFILL_CHOOSE_BUFFER
     LDA #$00
     STA MUSIC_REFILL_PENDING
-    STA MUSIC_HOLD
-    LDA #<$4000
-    STA MUSIC_PTR_L
-    LDA #>$4000
-    STA MUSIC_PTR_H
+    RTS
+REFILL_CHOOSE_BUFFER:
+    LDA MUSIC_ACTIVE
+    EOR #$01
+    BEQ REFILL_TO_A
+    LDA #<MUSIC_BUF_B
+    STA FILE_BUF_PTR
+    LDA #>MUSIC_BUF_B
+    STA FILE_BUF_PTR+1
+    JMP REFILL_READ
+REFILL_TO_A:
+    LDA #<MUSIC_BUF_A
+    STA FILE_BUF_PTR
+    LDA #>MUSIC_BUF_A
+    STA FILE_BUF_PTR+1
+REFILL_READ:
+    JSR READ_MUSIC_BLOCK
+    BCC REFILL_READ_OK
+    ; A transfer shorter than one block is how ProDOS reports the end of the
+    ; stream (a zero-length read at EOF, sometimes with the "END OF FILE" $27
+    ; status). That is the end of the song, not a disk error: hand the decoder
+    ; an $FF record so the pending block switch restarts the playlist. Treating
+    ; it as a failure muted the player and left the last FM chord ringing
+    ; forever with no track change. The single-buffer player never prefetched
+    ; past the end, so it only ever met the stream's own $FF terminator.
+    LDA READ_PARAMS+7
+    CMP #$02
+    BCC REFILL_END_OF_STREAM
+    LDA FILE_MLI_STATUS
+    CMP #$27
+    BEQ REFILL_END_OF_STREAM
+REFILL_READ_FAIL:
+    JMP CANYON_LOAD_FAIL
+REFILL_END_OF_STREAM:
+    ; Write an $FF terminator at the start of the inactive buffer. The decoder
+    ; consumes it on the pending switch and MUSIC_RESTART advances MUSIC_INDEX
+    ; exactly like a stream that carries its own $FF. One byte is enough: $FF
+    ; ends the tick immediately, so the rest of the block is never read.
+    LDA FILE_BUF_PTR+1
+    CMP #>MUSIC_BUF_B
+    BNE REFILL_END_TO_A
+    LDA #$FF
+    STA MUSIC_BUF_B
+    STA MUSIC_BUF_B+1
+    JMP REFILL_READ_OK
+REFILL_END_TO_A:
+    LDA #$FF
+    STA MUSIC_BUF_A
+    STA MUSIC_BUF_A+1
+REFILL_READ_OK:
+    ; Publish the block to the IRQ. The two stores are atomic against the
+    ; VSYNC interrupt so the switch cannot interleave and strand a request.
+    SEI
+    LDA #$00
+    STA MUSIC_REFILL_PENDING
+    LDA #$01
+    STA MUSIC_NEXT_READY
     CLI
     RTS
 
@@ -1278,7 +1749,16 @@ RESTORE_PSG_FROM_SHADOW:
     STA VERA_ADDR_H
     LDX #$00
 RESTORE_PSG_LOOP:
+    TXA
+    AND #$03
+    CMP #$02            ; volume register: apply the master volume again
+    BNE RESTORE_PSG_PLAIN
     LDA PSG_SHADOW,X
+    JSR SCALE_PSG_VOL
+    JMP RESTORE_PSG_STORE
+RESTORE_PSG_PLAIN:
+    LDA PSG_SHADOW,X
+RESTORE_PSG_STORE:
     STA VERA_DATA0
     INX
     CPX #$40
@@ -1573,17 +2053,21 @@ FIND_CATALOG_NOT_ROOT:
     LDA DIR_BLOCK+1
     CMP CATALOG_START_BLOCK+1
     BNE FIND_CATALOG_CONTINUATION
-    LDA #<$382B
+    ; Directory entry pointers are relative to DATA_BUF: entry 0 starts at
+    ; DATA_BUF+4 (after the block header), and the first block's slot 0 header
+    ; pushes entry 1 to DATA_BUF+$2B. Derive them from DATA_BUF so moving the
+    ; buffer can never desynchronise the catalog reader again.
+    LDA #<DATA_BUF+$2B
     STA DIR_PTR
-    LDA #>$3804
+    LDA #>DATA_BUF+$2B
     STA DIR_PTR+1
     LDA #12
     STA CATALOG_ENTRIES_LEFT
     JMP FIND_CATALOG_ENTRY_LOOP
 FIND_CATALOG_CONTINUATION:
-    LDA #<$3804
+    LDA #<DATA_BUF+$04
     STA DIR_PTR
-    LDA #>$3804
+    LDA #>DATA_BUF+$04
     STA DIR_PTR+1
     LDA #13
     STA CATALOG_ENTRIES_LEFT
@@ -2185,13 +2669,13 @@ MUSIC_FILE_PTR_LO:
 MUSIC_FILE_PTR_HI:
     !byte >MUSIC_FILE_0,>MUSIC_FILE_1,>MUSIC_FILE_2
 MUSIC_FILE_0:
-    ASC "SBINTRO.PSG"
+    ASC "SBINTRO.VZM"
     !byte $00
 MUSIC_FILE_1:
-    ASC "CANYON.PSG"
+    ASC "CANYON.VZM"
     !byte $00
 MUSIC_FILE_2:
-    ASC "GREENHILL.PSG"
+    ASC "GREENHILL.VZM"
     !byte $00
 MUSIC_NAME_PTR_LO:
     !byte <MUSIC_NAME_0,<MUSIC_NAME_1,<MUSIC_NAME_2
@@ -2442,6 +2926,18 @@ OSD_MNAME_LOOP:
     CPY #$09
     BCC OSD_MNAME_LOOP
 
+    ; FM indicator: append " F" to the music badge when the YM2151 is present.
+    LDA FM_PRESENT
+    BEQ OSD_FMT_IMG
+    LDY LEFT_BADGE_END
+    LDA #$20            ; space
+    STA OSD_LINE_BUF,Y
+    INY
+    LDA #$46            ; 'F'
+    STA OSD_LINE_BUF,Y
+    INY
+    STY LEFT_BADGE_END
+
 OSD_FMT_IMG:
     ; 5. Write "IMG:" (cols 29..32, no spaces)
     LDA #$49            ; 'I'
@@ -2513,6 +3009,11 @@ OSD_TENS_DONE:
     STA OSD_LINE_BUF+39
     RTS
 
+; ==============================================================================
+; YM2151 FM chip helpers (detection, reset, key off/restore)
+; ==============================================================================
+.include "../vera_fm.inc"
+
 ROW29_ADDR_LO:
     !byte $00, $40, $80, $C0, $00, $40, $80, $C0
 ROW29_ADDR_HI:
@@ -2545,4 +3046,3 @@ PSG_SHADOW:
 
 .include "palette_lut.inc"
 .include "font8x8.inc"
-

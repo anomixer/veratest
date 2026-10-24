@@ -7,7 +7,7 @@
 ;   - Dynamic Ground Level Modulation (Sonic bobs up/down over the rolling hills)
 ;   - Shimmering Water & Waterfall Palette Cycling (waterpalette at $1FA50)
 ;   - Rotating Sunflower Tile Animation (VRAM $0EB80 swapped in real-time)
-;   - Authentic 60 Hz VERA PSG Green Hill Zone Polyphonic Chiptune BGM
+;   - Authentic 60 Hz Green Hill Zone BGM: VERA PSG + optional YM2151 FM
 ;   - Standard ProDOS MLI Asset Streaming (< 1.5s clean load)
 ;   - Safe Zero-Page Usage ($06..$17), Zero Screen/Font Corruption on Exit
 ; ==============================================================================
@@ -33,6 +33,12 @@ OLD_IRQ_H   = $14
 REF_NUM     = $15
 BLK_CTR     = $16
 TMP_L       = $17
+FM_PRESENT  = $20       ; 1 = YM2151 FM daughterboard detected
+FM_COUNT    = $21       ; Remaining register pairs in the current FM batch
+FM_KEYS     = $22       ; Last $08 (key on/off) value per FM channel ($22..$29)
+
+; Music stream lives in RAM at $4000, BLOADed from SONICMUS.BIN by STARTUP.
+MUSIC_BASE  = $4800
 
 ; Constants
 SONIC_X     = 100
@@ -67,6 +73,13 @@ START:
     LDA #$11            ; Stride +1, Bank 1
     STA VERA_ADDR_H
     JSR CLR_64K
+
+    ; 2b. Detect and clear the optional YM2151 FM daughterboard. The Green Hill
+    ; stream carries both the PSG and the FM arrangement; when no daughterboard
+    ; is fitted the player skips the FM batches and the PSG part plays exactly
+    ; as in the PSG-only version of this demo.
+    JSR VERA_FM_DETECT
+    JSR VERA_FM_RESET
 
     ; 3. Load SONIC.DAT via ProDOS MLI ($C8 OPEN, $CA READ, $CC CLOSE)
     JSR LOAD_SONIC_ASSETS
@@ -312,6 +325,7 @@ EXIT_SONIC_DEMO:
     STA $C010           ; Clear keyboard strobe
     JSR STOP_MUSIC_IRQ  ; Disable VERA IRQ & restore Apple II IRQ vector
     JSR SILENCE_PSG     ; Silence all 16 PSG sound channels
+    JSR VERA_FM_KEY_OFF_ALL ; Key off every FM channel so notes do not hang
     LDA #$00
     STA VERA_DC_VID     ; Disable VERA video output (switches AppleWin back to text screen)
     RTS
@@ -407,8 +421,6 @@ NEXT_DIR_L   = $1C
 NEXT_DIR_H   = $1D
 DIR_PTR_L    = $1E
 DIR_PTR_H    = $1F
-MUSIC_DEST_L = $1A
-MUSIC_DEST_H = $1B
 
 ; ------------------------------------------------------------------------------
 ; Sequential ProDOS file reader: works with SONIC.DAT in the current prefix.
@@ -473,38 +485,7 @@ CP_F2_LP:
     INY
     BNE CP_F2_LP
 
-    ; 5. Read Blocks 3..17: 15 Blocks (7680 bytes) PSG Music -> Host RAM $4000..$5DFF
-    LDA #15
-    STA BLK_CTR
-    LDA #$00
-    STA MUSIC_DEST_L
-    LDA #$40
-    STA MUSIC_DEST_H
-
-LOAD_MUS_LP:
-    JSR READ_SONIC_BLOCK
-    BCC SONIC_R3_OK
-    JMP SONIC_LOAD_FAIL
-SONIC_R3_OK:
-    LDY #$00
-CP_MUS_P1:
-    LDA $3800,Y
-    STA (MUSIC_DEST_L),Y
-    INY
-    BNE CP_MUS_P1
-    INC MUSIC_DEST_H
-
-CP_MUS_P2:
-    LDA $3900,Y
-    STA (MUSIC_DEST_L),Y
-    INY
-    BNE CP_MUS_P2
-    INC MUSIC_DEST_H
-
-    DEC BLK_CTR
-    BNE LOAD_MUS_LP
-
-    ; 6. Read Blocks 18..25: 8 Blocks (4096 bytes) BG Tilemap -> VRAM $04800 (Bank 0)
+    ; 5. Read Blocks 3..10: 8 Blocks (4096 bytes) BG Tilemap -> VRAM $04800 (Bank 0)
     LDA #$00
     STA VERA_ADDR_L
     LDA #$48
@@ -573,6 +554,11 @@ SONIC_R7_OK:
     JSR COPY_BUF_TO_VRAM
     DEC BLK_CTR
     BNE STREAM_SPRITES
+
+    ; 10. The PSG+FM music stream is BLOADed to $4000 by the STARTUP menu
+    ; (SONICMUS.BIN).  Reading it into RAM from inside the demo corrupted
+    ; ProDOS' own file bookkeeping, so the loader only handles the assets now.
+
     ; Close the ProDOS file and report success.
     LDA REF_NUM
     STA SONIC_CLOSE_PARAMS+1
@@ -640,6 +626,11 @@ SONIC_PATH:
 SONIC_NAME:
     ASC "SONIC.DAT"
     HEX 00
+SONIC_NAMEBUF:
+    HEX 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    HEX 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 SONIC_PREFIX_PARAMS:
     HEX 01
     DA SONIC_PATH
@@ -653,7 +644,7 @@ SONIC_VOLUME_LEN:
 SONIC_OPEN_PARAMS:
     HEX 03
     DA SONIC_PATH
-    DA $6000
+    DA $3D00
     HEX 00
 SONIC_READ_PARAMS:
     HEX 04,00
@@ -789,9 +780,9 @@ CP_VRAM_P2:
 ; ------------------------------------------------------------------------------
 START_MUSIC_IRQ:
     SEI
-    LDA #<$4000
+    LDA #<MUSIC_BASE
     STA MUSIC_PTR_L
-    LDA #>$4000
+    LDA #>MUSIC_BASE
     STA MUSIC_PTR_H
     LDA #$00
     STA MUSIC_DELAY
@@ -870,18 +861,25 @@ IRQ_ADDR_H:
 
 TICK_SONIC_MUSIC:
     LDA MUSIC_DELAY
-    BEQ DECODE_MUSIC_PSG
+    BEQ DECODE_MUSIC_EVENT
     DEC MUSIC_DELAY
     RTS
 
-DECODE_MUSIC_PSG:
+DECODE_MUSIC_EVENT:
     LDY #$00
     LDA (MUSIC_PTR_L),Y
     CMP #$FF
-    BEQ RESTART_MUSIC
+    BNE MUSIC_CHK_DELAY
+    JMP RESTART_MUSIC
+MUSIC_CHK_DELAY:
     CMP #$80
-    BCC SET_MUSIC_DELAY
-
+    BCS MUSIC_CHK_PSG
+    STA MUSIC_DELAY
+    JSR MUSIC_ADVANCE_1
+    RTS
+MUSIC_CHK_PSG:
+    CMP #$C0
+    BCS MUSIC_CHK_FM
     ; PSG Register Write: Address is $1F9C0 + (Command & $3F)
     AND #$3F
     CLC
@@ -896,20 +894,45 @@ DECODE_MUSIC_PSG:
     LDY #$01
     LDA (MUSIC_PTR_L),Y
     STA VERA_DATA0
-
-    ; Advance music pointer by 2 bytes
+    JSR MUSIC_ADVANCE_2
+    JMP DECODE_MUSIC_EVENT
+MUSIC_CHK_FM:
+    CMP #$E0
+    BCS MUSIC_NOP_EVENT
+    ; $C0-$DF: (count - 1) in the low five bits, then count YM2151 pairs.
+    AND #$1F
     CLC
-    LDA MUSIC_PTR_L
-    ADC #$02
-    STA MUSIC_PTR_L
-    LDA MUSIC_PTR_H
-    ADC #$00
-    STA MUSIC_PTR_H
-    JMP DECODE_MUSIC_PSG
+    ADC #$01            ; stored value is count-1: recover the real pair count
+    STA FM_COUNT
+    JSR MUSIC_ADVANCE_1
+    LDA FM_PRESENT
+    BEQ MUSIC_FM_SKIP
+MUSIC_FM_WRITE:
+    LDY #$00
+    LDA (MUSIC_PTR_L),Y
+    PHA
+    JSR MUSIC_ADVANCE_1
+    LDY #$00
+    LDA (MUSIC_PTR_L),Y
+    TAX
+    PLA
+    JSR VERA_FM_WRITE   ; A = register, X = value (tracks $08 into FM_KEYS)
+    JSR MUSIC_ADVANCE_1
+    DEC FM_COUNT
+    BNE MUSIC_FM_WRITE
+    JMP DECODE_MUSIC_EVENT
+MUSIC_FM_SKIP:
+    ; No FM daughterboard: drop the batch payload without touching $Cs20/$Cs21.
+    JSR MUSIC_ADVANCE_2
+    DEC FM_COUNT
+    BNE MUSIC_FM_SKIP
+    JMP DECODE_MUSIC_EVENT
+MUSIC_NOP_EVENT:
+    ; $E0-$FE: block alignment no-op, consumes no tick.
+    JSR MUSIC_ADVANCE_1
+    JMP DECODE_MUSIC_EVENT
 
-SET_MUSIC_DELAY:
-    STA MUSIC_DELAY
-    ; Advance music pointer by 1 byte
+MUSIC_ADVANCE_1:
     CLC
     LDA MUSIC_PTR_L
     ADC #$01
@@ -919,10 +942,24 @@ SET_MUSIC_DELAY:
     STA MUSIC_PTR_H
     RTS
 
-RESTART_MUSIC:
-    LDA #<$4000
+MUSIC_ADVANCE_2:
+    CLC
+    LDA MUSIC_PTR_L
+    ADC #$02
     STA MUSIC_PTR_L
-    LDA #>$4000
+    LDA MUSIC_PTR_H
+    ADC #$00
+    STA MUSIC_PTR_H
+    RTS
+
+RESTART_MUSIC:
+    ; Loop the arrangement: the stream is compressed against an all-zero PSG and
+    ; YM2151 state, so both engines must be cleared before replaying it.
+    JSR SILENCE_PSG
+    JSR VERA_FM_RESET
+    LDA #<MUSIC_BASE
+    STA MUSIC_PTR_L
+    LDA #>MUSIC_BASE
     STA MUSIC_PTR_H
     LDA #$00
     STA MUSIC_DELAY
@@ -965,6 +1002,14 @@ SILENCE_LP:
     DEX
     BNE SILENCE_LP
     RTS
+
+; ==============================================================================
+; YM2151 FM daughterboard helpers (detection, reset, key off, register write)
+; ==============================================================================
+.include "../vera_fm.inc"
+
+; Block count of the PSG+FM music stream at the tail of SONIC.DAT (generated).
+.include "sonic_music.inc"
 
 ; ------------------------------------------------------------------------------
 ; Data Tables

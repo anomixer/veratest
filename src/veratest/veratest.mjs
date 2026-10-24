@@ -5,6 +5,8 @@ import { execFileSync } from "child_process"
 import { fileURLToPath } from "url"
 import { assembleAsmFile } from "../asm6502.mjs"
 import { compileApplesoftBasic } from "../applebasic.mjs"
+import { buildMusicStreams } from "../music_streams.mjs"
+import { buildSonicDat } from "./build_sonic_dat.mjs"
 import { generateRainbowRleData } from "./rainbow_rle.mjs"
 import { generatePreviewPng } from "./preview.mjs"
 
@@ -36,6 +38,14 @@ const buildProDosDisk = () => {
   if (!fs.existsSync(basePoPath)) {
     throw new Error(`Base ProDOS 2.4.3.po not found at ${basePoPath}!`)
   }
+
+  // The Sonic demo plays the same PSG+FM Green Hill stream as the slideshow, so
+  // refresh the converted streams and SONIC.DAT (and its block count include)
+  // before any 6502 source is assembled.
+  console.log("  🎵 Converting X16 ZSM soundtracks to VERA PSG+FM streams...")
+  buildMusicStreams()
+  console.log("  📦 Packing SONIC.DAT with the PSG+FM Green Hill stream...")
+  const sonicInfo = buildSonicDat()
 
   const cadius = process.env.CADIUS || path.join(projectRoot, "tools", "cadius.exe")
   if (!fs.existsSync(cadius) && !process.env.CADIUS) {
@@ -109,6 +119,7 @@ const buildProDosDisk = () => {
     const sonic2 = assembleAsmFile(veratestDir, "sonic.asm", 2, 0x2000)
     const sonic4 = assembleAsmFile(veratestDir, "sonic.asm", 4, 0x2000)
     const sonicDat = fs.readFileSync(path.join(veratestDir, "sonic.dat"))
+    const sonicMusic = sonicInfo.music
     const startup = compileApplesoftBasic(veratestDir, "startup.bas")
 
     const programs = [
@@ -119,6 +130,7 @@ const buildProDosDisk = () => {
       ["LAYER.BIN", 0x06, 0x2000, layer2], ["LAYER4.BIN", 0x06, 0x2000, layer4],
       ["MATRIX.BIN", 0x06, 0x2000, matrix2], ["MATRIX4.BIN", 0x06, 0x2000, matrix4],
       ["SONIC.BIN", 0x06, 0x2000, sonic2], ["SONIC4.BIN", 0x06, 0x2000, sonic4],
+      ["SONICMUS.BIN", 0x06, 0x4800, sonicMusic],
       ["SONIC.DAT", 0x00, 0x0000, sonicDat], ["STARTUP", 0xFC, 0x0801, startup],
     ]
     for (const [name, type, aux, data] of programs) addFile(name, type, aux, data)
@@ -129,7 +141,8 @@ const buildProDosDisk = () => {
     safeWriteFileSync(outputPath, fs.readFileSync(imagePath))
     console.log(`Successfully created Cadius ProDOS disk: ${outputPath}`)
     console.log(`Total application files: ${programs.length}`)
-    console.log(`  - SONIC.DAT: ${sonicDat.length} bytes (Sonic assets/music container)`)
+    console.log(`  - SONIC.DAT: ${sonicDat.length} bytes (Sonic asset container)`)
+    console.log(`  - SONICMUS.BIN: ${sonicMusic.length} bytes (PSG+FM Green Hill stream, $4800)`)
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true })
   }
