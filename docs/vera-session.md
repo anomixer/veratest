@@ -1,11 +1,11 @@
 # Apple II VERA Development — Master Session Summary & Architecture Guide
 
-**Session Date**: 2026-09-05 ~ 2026-10-11
+**Session Date**: 2026-09-05 ~ 2026-10-25
 **Target Environments**: Real Apple II (+64KB / //e / IIgs / Laser 128), [Apple2TS](https://apple2ts.com) Web Emulator, and [AppleWin](https://github.com/anomixer/AppleWin) Emulator  
 **Hardware Interface**: VERA (Versatile Embedded Retro Adapter) FPGA Card on **Slot 2** (`$C0A0` / `$C200`) or **Slot 4** (`$C0C0` / `$C400`)  
 **Active Projects Covered**:
 1. `C:\dev\Time-Pilot\TimePilot-IIvera` (Arcade Port & 100% Zero-Disk Runtime Engine — Release v1.9-iivera)
-2. `C:\dev\veratest` (7-in-1 Flagship Test Suite & 32MB 375-Image Mode 7 Slideshow Engine — Release v0.0.3)
+2. `C:\dev\veratest` (7-in-1 Flagship Test Suite & 32MB 375-Image Mode 7 Slideshow Engine, with YM2151 (OPM) FM audio — Release v0.0.5)
 3. `C:\dev\veramusic` (`veramusic`) (High-Fidelity Audio Engine, 16-Voice Grand Piano PSG, 8010 Hz PCM Streaming & VRAM Audio Player Suite)
 4. `C:\dev\verasdedit` (PC-Tools-Style 6502 Hex Sector Editor for VERA SD/MMC SPI Controller — Release v1.0)
 
@@ -47,7 +47,9 @@
       - [3.4.7 Cold-Boot & Clean Reboot Initialization](#347-cold-boot--clean-reboot-initialization)
       - [3.4.8 Acoustic Balancing for PSG Audio (`CANYON.ZSM`)](#348-acoustic-balancing-for-psg-audio-canyonzsm)
       - [3.4.9 5-Second Auto-Start Countdown in `startup.bas`](#349-5-second-auto-start-countdown-in-startupbas)
-    - [3.5 3-Track X16 ZSM PSG Audio Streaming System](#35-3-track-x16-zsm-psg-audio-streaming-system)
+    - [3.5 3-Track X16 ZSM VZM Audio Streaming with PSG and FM](#35-3-track-x16-zsm-vzm-audio-streaming-with-psg-and-fm)
+      - [3.5.1 Double-Buffered 60 Hz VZM Player](#351-double-buffered-60-hz-vzm-player)
+      - [3.5.2 One Master Volume Knob for PSG and FM](#352-one-master-volume-knob-for-psg-and-fm)
     - [3.6 Standalone Build Architecture](#36-standalone-build-architecture)
     - [3.7 Apple2TS & AppleWin Integration](#37-apple2ts--applewin-integration)
     - [3.8 Git Commit History (`veratest`)](#38-git-commit-history-veratest)
@@ -87,11 +89,11 @@
 | Repository | Path | Current Branch | HEAD Commit | Working Tree | Distribution Artifacts |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **TimePilot-IIvera** | `c:\dev\Time-Pilot\TimePilot-IIvera` | `master` (synced with `fork/master`) | `9548e85` (1 commit ahead of `origin/master`) | Clean | `TimePilot-IIvera.hdv` (800KB), `TimePilot-IIvera-D1.po` (140KB), `TimePilot-IIvera-D2.po` (140KB) |
-| **veratest** | `c:\dev\veratest` | `main` (1 commit ahead of `origin/main`) | `e78c441` (Tag `v0.0.3` is earlier) | Modified: Cadius packaging and file-level asset updates | `veratest.po` (140KB), `veratest.png`, `slideshow.hdv` (32MB), `slideshow.png` |
+| **veratest** | `c:\dev\veratest` | `main` (synced with `origin/main`) | `main` (tag `v0.0.5`) | Clean | `veratest.po` (140KB), `veratest.png`, `slideshow.hdv` (32MB), `slideshow.hdv.zip`, `slideshow.png` |
 | **veramusic** | `c:\dev\veramusic` (`c:\dev\veramus`) | `master` (synced with `origin/master`) | `56bc9c0` (1 squashed commit) | Clean | `jukebox.po` (140KB), `jukebox.hdv` (32MB), `psgvram.bin`, `psgstream.bin`, `psgplay.bin`, `pcmstream.bin` |
 | **verasdedit** | `c:\dev\verasdedit` | `master` (synced with `origin/master`) | `14eed58` | Clean | `verasdedit.po` (140KB bootable floppy), `VERASDEDIT.BIN` (3.5KB, load `$2000`) |
 
-The three other repositories retain the status recorded below. `veratest` has a tested Cadius packaging update in progress; its latest build outputs pass Cadius volume checks.
+The other repositories retain the status recorded below. `veratest` release v0.0.5 is built, verified and pushed on `main`: Cadius packaging, file-level ProDOS access and the YM2151 (OPM) FM audio path are all complete.
 
 ---
 
@@ -377,15 +379,16 @@ cac3041 audio: Restore authentic Konami Stage Clear Ah~~~ vocal fanfare and opti
 ### 3.1 Overview & High-Level Accomplishments
 `veratest` is the official, comprehensive hardware verification suite and demonstration package for the VERA FPGA card installed on Apple II computers, the [Apple2TS](https://apple2ts.com) web emulator, and the [AppleWin](https://github.com/anomixer/AppleWin) desktop emulator.
 
-Key features and deliverables in Release v0.0.3:
-1. **7-in-1 Flagship Test Suite (`veratest.po`, 140KB bootable floppy)**: Complete hardware exercise across sprites, 4-voice polyphonic PSG sound, Mode 7 256-color RLE decoding, Mode 4 RPG tilemap with smooth wander camera, dual-layer parallax plasma starfield, The Matrix 256-color text code rain, and the newly added *Sonic The Hedgehog: Green Hill Zone* port.
-2. **32MB Fullscreen 375-Image Slideshow Engine (`slideshow.hdv`)**: File-level ProDOS streaming engine displaying 375 Mode 7 ($320 \times 240$ 8bpp) images and 375 custom palettes with continuous 60 Hz VERA VSYNC IRQ background music.
-3. **Direct Mode 7 Bitmap On-Screen Display (OSD) Overlay**: High-performance status bar rendered directly into bottom scanlines (Row 29) of Mode 7 VRAM with precomputed zero-noise palette LUTs, sub-13ms image backup/restore, space-free corner badges, and a pure image MUTE mode leaving 232 pixels untouched.
-4. **PSG Shadow Register Engine (`PSG_SHADOW`)**: 64-byte RAM shadow mirror restoring active PSG channel frequencies, waveforms, and stereo pans in under 0.1ms upon unmuting, eliminating pitch bends and screeches.
-5. **Zero-Crash Cold-Boot & Reboot Safety**: Atomic initialization sequence blanking video and muting PSG before disk loading, guaranteeing 100% reliable system reboots without freezing.
-6. **Automatic VERA to Apple II Native Display Return**: Seamless single-monitor auto-switching for AppleWin and physical monitors on demo exit (`VERA_DC_VID = 0` and softswitch restoration).
-7. **Zero-Dependency Build Pipeline**: Pure Node.js build system containing an integrated two-pass 6502 assembler (`src/asm6502.mjs`) and an Applesoft BASIC tokenizing compiler (`src/applebasic.mjs`).
-8. **Apple2TS & AppleWin Integration**: Registered in Apple2TS Disk Collection (`src/ui/devices/disk/newreleases.ts`) and verified on AppleWin VERA fork.
+Key features and deliverables in Release v0.0.5:
+1. **YM2151 (OPM) FM Audio Path (`src/vera_fm.inc`, `src/zsm2vera.mjs`)**: the FM chip is signature-probed at `$Cs20`/`$Cs21`, reset, written and silenced by every player, and the three X16 soundtracks keep their original PSG **and** FM parts. A card without the chip falls back to PSG only, flagged as `P` instead of `F`.
+2. **7-in-1 Flagship Test Suite (`veratest.po`, 140KB bootable floppy)**: Complete hardware exercise across sprites, 4-voice polyphonic PSG sound, Mode 7 256-color RLE decoding, Mode 4 RPG tilemap with smooth wander camera, dual-layer parallax plasma starfield, The Matrix 256-color text code rain, and the *Sonic The Hedgehog: Green Hill Zone* port, which now plays the original PSG + FM arrangement; the sprite demo adds FM percussion.
+3. **32MB Fullscreen 375-Image Slideshow Engine (`slideshow.hdv`)**: File-level ProDOS streaming engine displaying 375 Mode 7 ($320 \times 240$ 8bpp) images and 375 custom palettes with continuous 60 Hz VERA VSYNC IRQ background music, plus **one master volume knob that moves PSG and FM together** (`+`/`=` and `-`/`_`, 0..15, default 12).
+4. **Direct Mode 7 Bitmap On-Screen Display (OSD) Overlay**: High-performance status bar rendered directly into bottom scanlines (Row 29) of Mode 7 VRAM with precomputed zero-noise palette LUTs, sub-13ms image backup/restore, space-free corner badges, and a pure image MUTE mode leaving 232 pixels untouched.
+5. **PSG Shadow Register Engine (`PSG_SHADOW`)**: 64-byte RAM shadow mirror restoring active PSG channel frequencies, waveforms, and stereo pans in under 0.1ms upon unmuting, eliminating pitch bends and screeches.
+6. **Zero-Crash Cold-Boot & Reboot Safety**: Atomic initialization sequence blanking video and muting PSG before disk loading, guaranteeing 100% reliable system reboots without freezing.
+7. **Automatic VERA to Apple II Native Display Return**: Seamless single-monitor auto-switching for AppleWin and physical monitors on demo exit (`VERA_DC_VID = 0` and softswitch restoration).
+8. **Zero-Dependency Build Pipeline**: Pure Node.js build system containing an integrated two-pass 6502 assembler (`src/asm6502.mjs`), an Applesoft BASIC tokenizing compiler (`src/applebasic.mjs`), the ZSM-to-VZM music converter (`src/zsm2vera.mjs` + `src/music_streams.mjs`) and a tick-by-tick stream verifier (`src/verify_music_streams.mjs`).
+9. **Apple2TS & AppleWin Integration**: Registered in Apple2TS Disk Collection (`src/ui/devices/disk/newreleases.ts`) and verified on AppleWin VERA fork.
 
 ---
 
@@ -407,9 +410,11 @@ VERA registers map into Apple II I/O space at `$C080 + ($10 * Slot)` and Slot RO
 | `+$0B` | `VERA_DC_VSCALE`| Vertical Scale (128 = 1.0x, 64 = 2.0x) |
 | `+$0C` | `VERA_DC_BORDER`| Border Color Index |
 | `+$0D` | `VERA_L0_CONFIG`| Layer 0 Configuration |
+| `+$20` | `YM_REG` | YM2151 register select (write-only; aliases `VERA_ADDR_L` when no FM chip is fitted) |
+| `+$21` | `YM_DATA` | YM2151 data write (aliases `VERA_ADDR_M` when no FM chip is fitted) |
 
 #### Dual-Port Slot Probing in Applesoft BASIC (`startup.bas`)
-The `STARTUP` script automatically probes Slot 2 (`$C200`) and Slot 4 (`$C400`) by writing and reading back test patterns through `VERA_ADDR_L` (`$C0A0` vs `$C0C0`). It automatically launches the matching slot binary (`SPROUT.BIN` for Slot 2, `SPROUT4.BIN` for Slot 4).
+The `STARTUP` script automatically probes Slot 2 (`$C200`) and Slot 4 (`$C400`) by writing and reading back test patterns through `VERA_ADDR_L` (`$C0A0` vs `$C0C0`). It automatically launches the matching slot binary (`SPRITE.BIN` for Slot 2, `SPRITE4.BIN` for Slot 4). The same script probes the YM2151 through `$Cs20`/`$Cs21` and prints `STATUS: YM2151 (OPM) FM CHIP FOUND` or `STATUS: NO YM2151 (OPM) FM CHIP FOUND`.
 
 ---
 
@@ -425,11 +430,11 @@ The `STARTUP` script automatically probes Slot 2 (`$C200`) and Slot 4 (`$C400`) 
   4. Mode 4 256-Color RPG Tilemap Engine (Centered Castle Wander Camera)
   5. Dual-Layer Parallax Energy Waves (Layer 0 Starfield + Layer 1 Plasma)
   6. The Matrix Digital Code Rain (256-Color Text Mode T256C=1 + Glitch)
-  7. Sonic The Hedgehog: Green Hill Zone (Parallax, Sprites, PSG Audio)
+  7. Sonic The Hedgehog: Green Hill Zone (Parallax, Sprites, PSG + FM Audio)
 ==============================================================================
 ```
 
-1. **Sprite Engine (`sprite.asm` / `SPROUT.BIN` & `SPROUT4.BIN`)**:
+1. **Sprite Engine (`sprite.asm` / `SPRITE.BIN` & `SPRITE4.BIN`)**:
    - 16 hardware sprites bouncing smoothly across display boundaries with 2.0x hardware scaling.
    - Demonstrates sprite attribute registers at VRAM `$1FC00..$1FFFF` and pixel pattern RAM at `$10000`.
 2. **4-Voice Polyphonic Stereo PSG Engine (`spritesnd.asm` / `SPRSND.BIN`)**:
@@ -438,6 +443,7 @@ The `STARTUP` script automatically probes Slot 2 (`$C200`) and Slot 4 (`$C400`) 
    - **Voice 2** (`$1F9C4`): Sawtooth Wave, Right Channel (`0x80`), Counter-Harmony & Stereo Widening.
    - **Voice 3** (`$1F9C8`): Triangle Wave, Center (`0xC0`), Slap / Disco Bassline.
    - **Voice 4** (`$1F9CC`): White Noise & Percussion, Center (`0xC0`), Kick + Snare + Hi-Hat with dynamic volume envelope decay.
+   - **Optional FM drums** (`FM_LOAD_PATCH` / `FM_STEP` / `FM_DRUM_TICK`): with the YM2151 present, FM channels 2 and 3 take the kick and snare/hat voices lifted from `SB-INTRO.ZSM` on the PSG drum grid, including the soundtrack's six-frame key-code/key-fraction pitch dive. FM channels 0/1 stay silent so the PSG lead and bass are not doubled.
 3. **Mode 7 Fullscreen Rainbow Arc (`mode7.asm` / `MODE7.BIN`)**:
    - Displays a $320 \times 240$ 8bpp 256-color true rainbow arc (76,800 bytes).
    - Decompressed in sub-millisecond time from compressed payload using pure 6502 RLE stream decoding.
@@ -455,11 +461,11 @@ The `STARTUP` script automatically probes Slot 2 (`$C200`) and Slot 4 (`$C400`) 
    - Dual-layer parallax scrolling: Layer 0 foreground loops continuously while Layer 1 distant mountains/clouds scroll at fractional speed.
    - 4-frame animated running Sonic hardware sprite with rolling ground dips (`Y_DIPS`).
    - Real-time animated sunflower tile swapping at VRAM `$0EB80` and 4-color cycling waterfall palette at `$1FA50`.
-   - Authentic 16-channel PSG Green Hill Zone soundtrack driven by 60 Hz VERA VSYNC IRQ.
-   - Assets compacted into a 103-block `SONIC.DAT` ProDOS file, opened and streamed sequentially with MLI `OPEN`/`READ`/`CLOSE` in 512-byte chunks.
-   - Fits on the 140KB floppy with 29 free blocks remaining in the Cadius-built image.
+   - Authentic Green Hill Zone soundtrack: 16-channel PSG **plus** the original YM2151 FM arrangement, driven by a 60 Hz VERA VSYNC IRQ.
+   - Assets compacted into an 88-block `SONIC.DAT` ProDOS file, opened and streamed sequentially with MLI `OPEN`/`READ`/`CLOSE` in 512-byte chunks. The 36-block music stream ships separately as `SONICMUS.BIN` (ProDOS type `BIN`, aux `$4800`), which the launcher `BLOAD`s before `BRUN SONIC.BIN`.
+   - Fits on the 140KB floppy with 4 free blocks remaining in the Cadius-built image.
 
-The current floppy build keeps `PRODOS` and `BASIC.SYSTEM` from the bootable ProDOS baseline, renames the volume `VERATEST`, and uses Cadius to remove the baseline utilities and add the launcher, demo binaries, and `SONIC.DAT`. Cadius writes the ProDOS catalog, file allocation indexes, bitmap, and file dates. Sonic opens `SONIC.DAT` from the active ProDOS prefix; its 103 sequential chunks are offsets within that one ProDOS file, not fixed disk blocks.
+The current floppy build keeps `PRODOS` and `BASIC.SYSTEM` from the bootable ProDOS baseline, renames the volume `VERATEST`, and uses Cadius to remove the baseline utilities and add the launcher, demo binaries, `SONIC.DAT` and `SONICMUS.BIN`. Cadius writes the ProDOS catalog, file allocation indexes, bitmap, and file dates. Sonic opens `SONIC.DAT` from the active ProDOS prefix; its 88 sequential chunks are offsets within that one ProDOS file, not fixed disk blocks.
 
 #### Complete VRAM & Sprite Attribute Clean Reset (`CLR_64K`)
 - Implemented high-performance 64KB unrolled block wiper (`CLR_64K`) across Bank 0 and Bank 1 in ~0.5s.
@@ -478,7 +484,7 @@ The current floppy build keeps `PRODOS` and `BASIC.SYSTEM` from the bootable Pro
 #### 3.4.1 File System Structure
 The generated `slideshow.hdv` is an authentic 32 MiB ProDOS 2.4.3 volume named `SLIDESHOW`.
 - **Root Directory**: Contains ProDOS system files, `STARTUP`, `SLIDESHOW.BIN`, `SLIDSHW4.BIN`, and the data directories.
-- **Music directory `/DATA/`**: Contains the three PSG music files.
+- **Music directory `/DATA/`**: Contains the three PSG **+ FM** VZM streams (`SBINTRO.VZM`, `CANYON.VZM`, `GREENHILL.VZM`).
 - **Image directories `/DATA1/` through `/DATA3/`**: Each contains 125 palette/image pairs, totaling 750 files: `VPAL001.BIN`..`VPAL375.BIN` (512-byte palettes) and `IMG001.BIN`..`IMG375.BIN` (76,800-byte Mode 7 bitmaps).
 - The Cadius build dynamically allocates directory and file blocks and produces catalogs accepted by standard ProDOS tools such as `CAT` and Filer. The loader does not depend on any specific block placement.
 
@@ -499,9 +505,11 @@ The slideshow locates each image through ProDOS paths and catalog metadata; it d
   - `N`: Next audio soundtrack.
   - `M`: Toggle audio mute / play.
   - `O`: Toggle Mode 7 graphics On-Screen Display (OSD) overlay.
+  - `+` / `=` and `-` / `_`: Master volume up / down, moving PSG and FM together (0..15, default 12).
   - `Esc` / `Q`: Exit cleanly back to Applesoft BASIC menu.
 - **Apple II Text Page 1 Dual-Display**:
-  - In dual-monitor setups, `slideshow.asm` updates row 24 with `IMG: nnn/375` and `MUSIC: <name>`. When muted, row 24 is cleanly blanked.
+  - In dual-monitor setups, `slideshow.asm` updates row 24 with `IMG: nnn/375`, `MUSIC: <name>` and the master volume as ` VOL:nn`. When muted, row 24 is cleanly blanked.
+  - The FM chip is flagged as `F` next to the music name (`P` on a PSG-only card), on both the text page and the graphics OSD.
 
 #### 3.4.4 Direct Mode 7 Bitmap OSD Overlay & Zero-Artifact Palette LUTs
 - **Direct Bitmap Rendering**: Renders status badges directly into Mode 7 bitmap VRAM on Row 29 (bottom 8 scanlines 232..239, VRAM `$12200..$12BFF`).
@@ -523,22 +531,33 @@ The slideshow locates each image through ProDOS paths and catalog metadata; it d
 - **Continuous 60 Hz Audio**: Music streaming continues without pauses or tempo hesitation while file-allocated image blocks are transferred.
 
 #### 3.4.8 Acoustic Balancing for PSG Audio (`CANYON.ZSM`)
-- Scaled noise percussion to 55% and boosted melodic voices to 130% in `slideshow_hdv.mjs`, producing a balanced, punchy acoustic mix.
+- The per-track balance curves in `src/music_streams.mjs` scale noise percussion to 55% and boost melodic voices to 130% for `CANYON` at conversion time, producing a balanced, punchy acoustic mix that the FM half is layered on top of.
 
 #### 3.4.9 5-Second Auto-Start Countdown in `startup.bas`
 - Selecting option `1` displays navigation controls and automatically starts after 5 seconds or immediately upon any keypress, matching arcade launcher convenience.
 
 ---
 
-### 3.5 3-Track X16 ZSM PSG Audio Streaming System
-Three Commander X16 ZSM soundtracks (`SB-INTRO`, `CANYON`, and `GREENHILL`) were parsed and converted at build time into pure VERA PSG streams:
-- Stripped FM/YM2151 commands, preserving all 16-channel PSG voice registers, pan, frequency, volume, and waveform settings.
-- Stored as ordinary ProDOS files under `/DATA/`; Cadius allocates their storage dynamically.
-- Streamed through a compact 512-byte buffer at `$4000`.
-- Driven by the **VERA VSYNC IRQ at 60 Hz**:
-  - Music playback continues uninterrupted during file-allocated image streaming without tempo hesitation.
-  - VERA address registers (`VERA_ADDR_L/M/H`) are strictly saved and restored around each IRQ tick to prevent corruption of the active image loading stride.
-  - Switching tracks or exiting automatically clears all 16 PSG channels.
+### 3.5 3-Track X16 ZSM VZM Audio Streaming with PSG and FM
+Three Commander X16 ZSM soundtracks (`SB-INTRO`, `CANYON`, `GREENHILL`) are converted at build time by `src/zsm2vera.mjs` (driven by `src/music_streams.mjs`) into **VZM** streams that keep both halves of the original arrangement:
+- Every PSG write, every batched YM2151 register pair and the delay that closes each tick are kept in original order, packed into records that never straddle a 512-byte ProDOS block (`$E0..$FE` is padding, `$FF` ends the stream).
+- The OPM key register `$08` is forwarded verbatim — operator mask in bits 6..3, channel in bits 2..0, mask 0 releases — and is never de-duplicated, because a repeated identical key-on is a legitimate retrigger.
+- Stream sizes: `SBINTRO.VZM` 678 blocks / 20,385 ticks / 20,075 FM writes, `CANYON.VZM` 243 blocks / 7,570 ticks / 4,081 FM writes, `GREENHILL.VZM` 36 blocks / 3,192 ticks / 6,561 FM writes. They live in `/DATA/`; Cadius allocates them dynamically.
+- On a card without the FM chip the player drops the `$C0..$DF` batches at run time; nothing is lost at build time, so the same files serve both cases.
+- `node src/verify_music_streams.mjs` rebuilds the three streams, asserts the bytes match the packaged files, and replays the raw ZSM against the VZM stream tick by tick: **0 mismatched ticks** out of 31,147, with an identical `$08` sequence (1,890 / 2,543 / 8,366 key writes).
+
+#### 3.5.1 Double-Buffered 60 Hz VZM Player
+- Two 512-byte tick buffers (`MUSIC_BUF_A` at `$4000`, `MUSIC_BUF_B` at `$4200`). Once the IRQ pointer passes the block midpoint (`MUSIC_REFILL_PENDING`), `SERVICE_MUSIC_REQUESTS` issues one MLI `READ` of the next block in the foreground and publishes it under a short `SEI` window.
+- At a block boundary `MUSIC_SWITCH_BLOCK` flips the buffers and keeps decoding the same tick, so no tick is dropped; a late prefetch defers one frame instead of decoding half-filled memory (measured: 75 switches, 0 deferred, over ~30 s).
+- A short read past EOF is the MLI end-of-file condition, not an error: `REFILL_MUSIC_BUFFER` writes an `$FF` terminator, and `MUSIC_RESTART` advances to the next soundtrack instead of muting the player.
+- Driven by the **VERA VSYNC IRQ at 60 Hz**, with `VERA_ADDR_L/M/H` saved and restored around each tick, so image streaming never disturbs the tempo; switching tracks or exiting clears every PSG channel and FM key register.
+
+#### 3.5.2 One Master Volume Knob for PSG and FM
+- `+`/`=` and `-`/`_` change `MUSIC_VOL` (`$440F`, 0..15, default 12). The value is shown as ` VOL:nn` on the Apple II text page (row 24), not in the graphics OSD.
+- **PSG**: every voice level is scaled at play time as `(level * vol + 8) >> 4` with the pan bits carried through untouched; the 64-byte `PSG_SHADOW` keeps the unscaled stream values, so a volume change re-sends all 16 voices immediately.
+- **FM**: the OPM has no global volume register, so `FM_TL_BASE` (`$3B30`) mirrors the 32 operator total-level bytes (`$60..$7F`) and `FM_ATTEN_TAB` adds a TL offset with the same dB slope — `127, 32, 24, 19, 16, 14, 11, 10, 8, 7, 5, 4, 3, 2, 2, 0` for volumes 0..15 (0.75 dB per step; default 12 ≈ −2.25 dB, 15 = exactly as the tracker authored it, 0 = silent). `FM_APPLY_VOLUME` rewrites all 32 levels from that mirror under a short `SEI`.
+- **Hardware gotcha:** the total level is a **7-bit** field (`ymfm_opm.h` → `op_total_level` = `bitfield(0x60, 0, 7)`), so bit 7 of a stream byte has to be masked off *before* the offset is added. `GREENHILL` writes `$8A`/`$94`/`$9D` on its carriers; without the mask those looked "already above `$7F`" and were clamped to `$7F` — maximum attenuation, i.e. silence — which muted that track's whole FM half. AppleWin's `-fm-wav-dump` measured the YM2151 output as essentially zero before the fix and peak 13,676 (≈ −7.6 dBFS, about +13 dB) after it.
+- The YM2151 itself is detected by writing `$5A`/`$A5` to `$Cs20`/`$Cs21` and reading them back: the values do not echo on a card without the chip, because those two apertures alias the VERA address latches.
 
 ---
 
@@ -546,6 +565,8 @@ Three Commander X16 ZSM soundtracks (`SB-INTRO`, `CANYON`, and `GREENHILL`) were
 The build uses Node.js, the bundled Cadius executable (`tools/cadius.exe`), and no external assembler:
 - `src/asm6502.mjs`: High-performance two-pass 6502 assembler. Correctly evaluates labels, equates, zero page vs absolute addressing, and injects slot base constants (`VERA_BASE = $C200` or `$C400`).
 - `src/applebasic.mjs` & `src/applebasic.inc`: Applesoft BASIC compiler that directly parses plain-text `startup.bas` into native Apple II binary memory-linked token streams (`NextPtr[2] + LineNo[2] + Tokens + 0x00`).
+- `src/zsm2vera.mjs`, `src/music_streams.mjs`, `src/verify_music_streams.mjs`: ZSM → VZM converter (PSG writes, batched YM2151 pairs, per-track balance), the build step that regenerates all three `/DATA/*.VZM` files for both images, and the tick-by-tick verifier.
+- `src/vera_fm.inc`: YM2151 detect (`$Cs20`/`$Cs21` signature), reset, register write, and key-off/key-restore helpers shared by every player.
 - `src/veratest/veratest.mjs` and `src/slideshow/slideshow_hdv.mjs`: Both package ProDOS images with Cadius. Set `CADIUS` to override the bundled executable.
 - `build.bat`:
   ```cmd
@@ -564,16 +585,16 @@ The build uses Node.js, the bundled Cadius executable (`tools/cadius.exe`), and 
 
 ### 3.8 Git Commit History (`veratest`)
 ```text
-e78c441 (HEAD -> main) Support file-level slideshow installs
-5216fe1 (tag: v0.0.3) feat(v0.0.3): 7-in-1 VERA flagship showcase & 32MB slideshow for Apple2TS and AppleWin
-d248872 feat(v0.0.2): 6-in-1 flagship showcases, 32MB 375-image fullscreen slideshow engine, and zero-dependency build system
-98304c0 Refactor build system into modular 6502 assembly and Applesoft BASIC architecture
-8a2d040 docs: add AGENTS.md development and architecture guide
-056478e (chore)README
-e259417 Add acknowledgements and credits section to README
+0d130cc (tag: v0.0.5) slideshow: VERA FM support with one PSG+FM master volume knob (10/24-10/25)
+ca7c6ed Use Cadius packaging for veratest images
+e78c441 Support file-level slideshow installs
+0ace900 docs: updated a2vera sources
+aefb2ba docs: integrate veramusic and verasdedit architectures into vera-session.md
+0e493f7 asm6502: preserve internal spaces in ASC strings
+85cc861 docs: add Apple II VERA master architecture and session guide (docs/vera-session.md)
 ```
 
-The current uncommitted update converts the 140KB floppy packager to Cadius, bundles `tools/cadius.exe` for both image builds, and switches Sonic asset loading to ProDOS `OPEN`/`READ`/`CLOSE`. Both generated images passed Cadius `CHECKVOLUME`; the user also confirmed the build works.
+Release v0.0.5 squashes the 2026-10-24..10-25 work into `0d130cc`: VERA FM chip support across every player, the ZSM → VZM converter and its three streams, the double-buffered 60 Hz player, the PSG + FM master volume knob, the 7-bit OPM total-level fix that restored `GREENHILL`'s FM, and the documentation updates. It publishes `veratest.po`, `slideshow.hdv` and `slideshow.hdv.zip`. Earlier `v0.0.x` tags point at pre-squash snapshots and are not ancestors of the current `main`.
 
 ---
 
@@ -945,10 +966,16 @@ The repository is completely standalone and requires only Node.js (ESM):
 | **Stage Clear Fanfare** | `MAIN.BIN` (TimePilot) | Apple2TS | Authentic CX16 fanfare (PCM); clean transition | **PASS** |
 | **Dual-Port Hardware Probe** | `STARTUP` (veratest) | Apple2TS & AppleWin (Slot 2/4) | Correctly identifies active VERA slot and launches matching binary | **PASS** |
 | **7-in-1 Flagship Test Suite** | `veratest.po` | Apple2TS & AppleWin | All 7 showcases run smoothly without visual artifacts or memory corruption | **PASS** |
-| **Sonic Green Hill Zone Port** | `SONIC.BIN` / `SONIC4.BIN` | Apple2TS & AppleWin | Dual-layer parallax, 4-frame sprite, rolling ground dips, sunflower swapping, 60Hz PSG | **PASS** |
-| **Complete VRAM & Ghost Sprite Reset** | `SPROUT.BIN` / `SPRSND.BIN` | Apple2TS & AppleWin | `CLR_64K` clears all 128 sprite attribute slots and 128KB VRAM; zero ghost sprites | **PASS** |
+| **Sonic Green Hill Zone Port** | `SONIC.BIN` / `SONIC4.BIN` | Apple2TS & AppleWin | Dual-layer parallax, 4-frame sprite, rolling ground dips, sunflower swapping, 60Hz PSG + FM | **PASS** |
+| **Complete VRAM & Ghost Sprite Reset** | `SPRITE.BIN` / `SPRSND.BIN` | Apple2TS & AppleWin | `CLR_64K` clears all 128 sprite attribute slots and 128KB VRAM; zero ghost sprites | **PASS** |
 | **Native Display Return on Exit** | All Showcases (veratest) | AppleWin & Apple2TS | `VERA_DC_VID = 0` instantly restores Apple II text screen on single-monitor setups | **PASS** |
-| **32MB File-Level Image Streaming** | `slideshow.hdv` | Apple2TS & AppleWin | 375 images load from ProDOS catalog/index-resolved allocations via MLI $80; no fixed block assumptions; continuous 60 Hz VSYNC PSG | **PASS** |
+| **32MB File-Level Image Streaming** | `slideshow.hdv` | Apple2TS & AppleWin | 375 images load from ProDOS catalog/index-resolved allocations via MLI $80; no fixed block assumptions; continuous 60 Hz VSYNC PSG + FM | **PASS** |
+| **YM2151 FM Chip Probe** | `STARTUP` / `slideshow.asm` | AppleWin (Slot 2) & Apple2TS | `$Cs20`/`$Cs21` signature echo separates FM from PSG-only; the `F` / `P` badge matches the probe | **PASS** |
+| **PSG + FM VZM Playback** | `slideshow.hdv` | AppleWin (Slot 2 + S7 HD) | All three tracks carry PSG + FM; the FM records are skipped only when the chip is absent | **PASS** |
+| **PSG + FM Master Volume** | `slideshow.asm` | AppleWin | `+`/`=` and `-`/`_` move the PSG levels and all 32 OPM total levels together; ` VOL:nn` on row 24 | **PASS** |
+| **7-bit OPM Total Level** | `slideshow.asm` (`FM_ATTENUATE`) | AppleWin + `-fm-wav-dump` | `GREENHILL` FM audible again; YM2151 dump peaks at 13,676 (≈ −7.6 dBFS) instead of silence | **PASS** |
+| **Double-Buffered Music Stream** | `slideshow.asm` | AppleWin headless | 75 block switches, 0 deferred ticks over ~30 s; end of stream advances the track | **PASS** |
+| **ZSM → VZM Stream Fidelity** | `verify_music_streams.mjs` | Node.js | 0 mismatched ticks out of 31,147; identical `$08` key sequences | **PASS** |
 | **Mode 7 Direct Bitmap OSD Overlay** | `slideshow.asm` | Apple2TS & AppleWin | Row 29 corner badges render with precomputed LUTs; 0% palette overwriting | **PASS** |
 | **Pure Image MUTE Mode** | `slideshow.asm` | Apple2TS & AppleWin | Mute suppresses left badge; 232 pixels wide (72.5% of screen) pristine untouched art | **PASS** |
 | **PSG Shadow Unmute Engine** | `slideshow.asm` | Apple2TS & AppleWin | Unmute restores 16 voices in <0.1ms without pitch bends or screeching | **PASS** |
@@ -979,7 +1006,7 @@ Historical environment snapshot from the September 2026 session; the `veratest` 
 
 1. **All Four Repositories Synchronized**:
    - `c:\dev\Time-Pilot\TimePilot-IIvera`: Commit `a7fa28c` (Tag `v1.9-iivera`, 1 commit ahead of upstream `0870564`), working tree clean.
-   - `c:\dev\veratest`: Branch `main`, HEAD `e78c441` (`Support file-level slideshow installs`), one commit ahead of `origin/main`; current Cadius/file-level update is uncommitted. `build.bat all` succeeds and both images pass Cadius volume checks.
+   - `c:\dev\veratest`: Branch `main` (tag `v0.0.5`), synced with `origin/main`, working tree clean. `build.bat all` succeeds, both images pass Cadius volume checks, and `node src/verify_music_streams.mjs` reports 0 mismatched ticks.
    - `c:\dev\veramusic` (`c:\dev\veramus`): Commit `56bc9c0` on `master` (synced with `origin/master`), working tree clean.
    - `c:\dev\verasdedit`: Commit `14eed58` on `master` (synced with `origin/master`), working tree clean.
 2. **Build Outputs Generated & Verified**:
@@ -987,9 +1014,10 @@ Historical environment snapshot from the September 2026 session; the `veratest` 
    - `TimePilot-IIvera-D1.po` (140KB bootable floppy Disk 1 ready to run)
    - `TimePilot-IIvera-D2.po` (140KB bootable floppy Disk 2 ready to run)
    - `TimePilot-IIvera-v1.9.zip` (230KB all-in-one distribution archive)
-   - `veratest.po` (140KB Cadius-built bootable floppy image; current build checked)
+   - `veratest.po` (140KB Cadius-built bootable floppy image; v0.0.5 build with YM2151 FM support)
    - `veratest.png` (560x384 preview screenshot for Apple2TS Disk Collection)
-   - `slideshow.hdv` (32MB Cadius-built bootable hard disk image; current build checked)
+   - `slideshow.hdv` (32MB Cadius-built bootable hard disk image; PSG + FM streams, v0.0.5 build)
+   - `slideshow.hdv.zip` (compressed `slideshow.hdv` for the release upload)
    - `slideshow.png` (560x384 preview screenshot for Slideshow Showcase)
    - `jukebox.po` (140KB bootable floppy image with VERA SRAM pre-load player)
    - `jukebox.hdv` (32MB bootable hard disk image with full 5-track lineup)
@@ -1002,10 +1030,10 @@ Historical environment snapshot from the September 2026 session; the `veratest` 
 3. **Documentation Current**:
    - `Time-Pilot\TimePilot-IIvera\README.md` (Bilingual English & Traditional Chinese, CMake + Python pipeline)
    - `Time-Pilot\TimePilot-IIvera\AGENTS.md` (Updated with CMake pipeline, memory map, and ProDOS gotchas)
-   - `veratest\README.md`, `veratest\AGENTS.md`, and `veratest\docs\vera-session.md` (updated for Cadius packaging and file-level ProDOS access)
+   - `veratest\README.md`, `veratest\AGENTS.md`, and `veratest\docs\vera-session.md` (updated for v0.0.5: YM2151 FM support, VZM streams, the PSG + FM master volume and the 7-bit OPM total-level fix)
    - `veramusic\README.md` & `veramusic\AGENTS.md` (Complete audio synthesis, streaming, and player reference through Milestone 22)
    - `verasdedit\AGENTS.md` (Complete 6502 hex editor architecture and VERA SD SPI debugging lessons)
-   - `c:\dev\veratest\docs\vera-session.md` (This master document; current veratest status updated through October 11, 2026)
+   - `c:\dev\veratest\docs\vera-session.md` (This master document; current veratest status updated through October 25, 2026)
 
 
 

@@ -23,7 +23,9 @@ Use `OPEN` / `READ` / `CLOSE` for normal streams:
 4. Close the reference on success and every error path. Do not continue after an open/read error or treat a short final read as a complete data chunk.
 5. If a format is a fixed-size block container, validate its expected size and handle its final partial logical payload explicitly. Padding the container at build time can simplify exact 512-byte reads, but the logical end marker/length must remain authoritative.
 
-The Sonic demo uses this pattern for `SONIC.DAT`; the slideshow uses it for PSG music files.
+The Sonic demo uses this pattern for `SONIC.DAT`; the slideshow uses it for the PSG + FM `VZM` streams in `/DATA/`.
+
+A player that prefetches one block ahead reads past the end of every stream, so the last `READ` lands beyond EOF and ProDOS answers with a short or zero-length transfer (status `$27`). That is the normal end of the stream, not a read failure: write an end-of-stream terminator into the prefetched buffer and let the player advance to the next track. Treating it as an error cost `veratest`'s slideshow its track change and left the last chord ringing, which is the classic symptom.
 
 ## 3. Streaming large files directly to VERA
 
