@@ -111,7 +111,7 @@ SAVE_BASIC_ZP:
     JSR SILENCE_PSG
     JSR CLEAR_PSG_SHADOW
 
-    ; 3b. Detect the YM2151 FM chip ($Cs20/$Cs21) and clear
+    ; 3b. Detect the YM2151 FM chip on /DEVICE SELECT and clear
     ; its registers. The music streams carry both the PSG and the FM parts;
     ; when no FM chip answers the player simply skips FM batches and
     ; the PSG part still plays exactly as in the PSG-only version.
@@ -550,7 +550,7 @@ FM_APPLY_LOOP:
     TXA
     CLC
     ADC #$60                  ; $60..$7F = operator total levels
-    STA YM_REG
+    STA YM_SEL
     LDA FM_TL_BASE,X
     JSR FM_ATTENUATE
     STA YM_DATA
@@ -1516,7 +1516,7 @@ MUSIC_FM_BATCH:
 MUSIC_FM_WRITE:
     LDY #$00
     LDA (MUSIC_PTR_L),Y
-    STA YM_REG
+    STA YM_SEL
     CMP #$08
     BNE MUSIC_FM_PLAIN
     ; Key on/off register: remember the value per channel for mute/unmute.
@@ -1532,7 +1532,7 @@ MUSIC_FM_WRITE:
     JSR MUSIC_ADVANCE_1
     JMP MUSIC_FM_NEXT
 MUSIC_FM_PLAIN:
-    ; A still holds the register byte that was just written to YM_REG; keep it
+    ; A still holds the register byte that was just written to YM_SEL; keep it
     ; before advancing, because the FM aperture cannot be read back.
     STA VOL_TMP
     JSR MUSIC_ADVANCE_1
@@ -1560,7 +1560,7 @@ MUSIC_FM_NEXT:
     BNE MUSIC_FM_WRITE
     JMP MUSIC_DECODE
 MUSIC_FM_SKIP:
-    ; No FM chip: drop the batch payload without touching $Cs20/$Cs21.
+    ; No FM chip: drop the batch payload without touching YM_SEL/YM_DATA (/DEVICE SELECT).
     JSR MUSIC_ADVANCE_2
     DEC FM_COUNT
     BNE MUSIC_FM_SKIP

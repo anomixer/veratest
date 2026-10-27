@@ -107,3 +107,13 @@ For apps that use one data container, copy that container alongside the app and 
 - [ ] File type, auxiliary address, volume name, and timestamps are checked.
 - [ ] `CHECKVOLUME` passes after image creation and any header compatibility adjustment.
 - [ ] A copied file-level install has been tested on a different ProDOS volume/directory.
+
+## 7. Rebuild after a hardware I/O change
+
+`build.bat all` regenerates the shared FM probe in both STARTUP programs,
+assembles Slot 2/4 players and packages both images. Verify the new FM ports
+with a matching emulator; the old Cx latch-alias test no longer applies.
+Run `node src/verify_music_streams.mjs`, Cadius `CHECKVOLUME` on both outputs,
+and compare the ZIP's HDV entry with `slideshow.hdv`. Preserve the 24-row
+ABOUT layout when changing STARTUP. The 2026-10-27 build passes the image and
+stream checks; runtime coverage is recorded in [AGENTS.md](../AGENTS.md).

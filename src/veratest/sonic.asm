@@ -922,7 +922,7 @@ MUSIC_FM_WRITE:
     BNE MUSIC_FM_WRITE
     JMP DECODE_MUSIC_EVENT
 MUSIC_FM_SKIP:
-    ; No FM daughterboard: drop the batch payload without touching $Cs20/$Cs21.
+    ; No FM daughterboard: drop the batch payload without touching YM_SEL/YM_DATA (/DEVICE SELECT).
     JSR MUSIC_ADVANCE_2
     DEC FM_COUNT
     BNE MUSIC_FM_SKIP

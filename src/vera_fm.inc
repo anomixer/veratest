@@ -2,11 +2,9 @@
 ; YM2151 (Yamaha OPM) FM Chip Support
 ; ==============================================================================
 ;
-; The VERA card decodes an optional YM2151 FM chip at
-; $Cs20 (YM_REG, write only) and $Cs21 (YM_DATA write / status read).  When the
-; FM chip is absent (or the card's FM option is disabled) those two
-; addresses simply alias VERA_ADDR_L / VERA_ADDR_M, which is exactly what the
-; detection routine below exploits.
+; The optional YM2151 uses /DEVICE SELECT, separate from VERA Cx registers.
+; YM_SEL/YM_DATA are $C0A0/$C0A1 in Slot 2, $C0C0/$C0C1 in Slot 4.
+; Detection checks a bounded BUSY transition; absent FM is floating-bus I/O.
 ;
 ; The including source must define these zero page locations beforehand:
 ;   FM_PRESENT : 0 = no FM chip, 1 = YM2151 detected & initialised
@@ -19,39 +17,8 @@
 YM_KEY_REG = $08                  ; YM2151 key on/off register (ch bits 0..2, opmask bits 3..6)
 
 ; ------------------------------------------------------------------------------
-; Detect the FM chip.
-; Writes a known pattern into VERA_ADDR_L/M and reads it back through the two
-; YM2151 offsets: an FM card returns 0 / status (never the written pattern),
-; while a card without FM returns the aliased VERA address bytes.
-; VERA_ADDR_L/M are restored, so the foreground VRAM pointer is untouched.
-; ------------------------------------------------------------------------------
-VERA_FM_DETECT:
-    LDA VERA_ADDR_L
-    PHA
-    LDA VERA_ADDR_M
-    PHA
-    LDA #$5A
-    STA VERA_ADDR_L
-    LDA #$A5
-    STA VERA_ADDR_M
-    LDA YM_REG                    ; $Cs20: 0 with FM, $5A address alias without
-    CMP #$5A
-    BNE VERA_FM_FOUND
-    LDA YM_DATA                   ; $Cs21: status with FM, $A5 alias without
-    CMP #$A5
-    BNE VERA_FM_FOUND
-    LDA #$00
-    STA FM_PRESENT
-    JMP VERA_FM_RESTORE_ADDR
-VERA_FM_FOUND:
-    LDA #$01
-    STA FM_PRESENT
-VERA_FM_RESTORE_ADDR:
-    PLA
-    STA VERA_ADDR_M
-    PLA
-    STA VERA_ADDR_L
-    RTS
+; Shared with the inline machine-code probe in both BASIC launchers.
+include "vera_fm_detect.inc"
 
 ; ------------------------------------------------------------------------------
 ; Silence the FM chip and reset every tone register to zero.
@@ -64,7 +31,7 @@ VERA_FM_RESET:
     JSR VERA_FM_KEY_OFF_ALL
     LDX #$20
 VERA_FM_RESET_LOOP:
-    STX YM_REG
+    STX YM_SEL
     LDA #$00
     STA YM_DATA
     INX
@@ -88,7 +55,7 @@ VERA_FM_KEY_OFF_ALL:
     LDX #$00
 VERA_FM_KEY_OFF_LOOP:
     LDA #YM_KEY_REG
-    STA YM_REG
+    STA YM_SEL
     STX YM_DATA                   ; opmask 0 = key off, channel = X
     INX
     CPX #$08
@@ -106,7 +73,7 @@ VERA_FM_RESTORE_KEYS:
     LDX #$00
 VERA_FM_RESTORE_LOOP:
     LDA #YM_KEY_REG
-    STA YM_REG
+    STA YM_SEL
     LDA FM_KEYS,X
     STA YM_DATA
     INX
@@ -120,7 +87,7 @@ VERA_FM_RESTORE_DONE:
 ; Also updates FM_KEYS when the key register is written.
 ; ------------------------------------------------------------------------------
 VERA_FM_WRITE:
-    STA YM_REG
+    STA YM_SEL
     CMP #YM_KEY_REG
     BNE VERA_FM_WRITE_DATA
     TXA

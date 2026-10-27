@@ -5,6 +5,7 @@ import { execFileSync } from "child_process"
 import { fileURLToPath } from "url"
 import { assembleAsmFile } from "../asm6502.mjs"
 import { compileApplesoftBasic } from "../applebasic.mjs"
+import { updateFmProbe } from "../update_fm_probe.mjs"
 import { buildMusicStreams } from "../music_streams.mjs"
 import { buildSonicDat } from "./build_sonic_dat.mjs"
 import { generateRainbowRleData } from "./rainbow_rle.mjs"
@@ -120,6 +121,7 @@ const buildProDosDisk = () => {
     const sonic4 = assembleAsmFile(veratestDir, "sonic.asm", 4, 0x2000)
     const sonicDat = fs.readFileSync(path.join(veratestDir, "sonic.dat"))
     const sonicMusic = sonicInfo.music
+    updateFmProbe()
     const startup = compileApplesoftBasic(veratestDir, "startup.bas")
 
     const programs = [

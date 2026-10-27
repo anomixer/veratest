@@ -1,8 +1,13 @@
 # Apple II VERA Development — Master Session Summary & Architecture Guide
 
+> **FM I/O update (2026-10-27, AI-assisted):** FM uses `/DEVICE SELECT`:
+> Slot 2 `$C0A0/$C0A1`, Slot 4 `$C0C0/$C0C1` (`YM_SEL` / `YM_DATA`).
+> VERA video/SD remain at `$C200/$C400`. Rebuild both images and use an
+> emulator with the new mapping; older FM mappings are not supported.
+
 **Session Date**: 2026-09-05 ~ 2026-10-25
 **Target Environments**: Real Apple II (+64KB / //e / IIgs / Laser 128), [Apple2TS](https://apple2ts.com) Web Emulator, and [AppleWin](https://github.com/anomixer/AppleWin) Emulator  
-**Hardware Interface**: VERA (Versatile Embedded Retro Adapter) FPGA Card on **Slot 2** (`$C0A0` / `$C200`) or **Slot 4** (`$C0C0` / `$C400`)  
+**Hardware Interface**: VERA video/SD on **Slot 2** (`$C200`) or **Slot 4** (`$C400`); separate YM2151 FM ports at `$C0A0/$C0A1` or `$C0C0/$C0C1`
 **Active Projects Covered**:
 1. `C:\dev\Time-Pilot\TimePilot-IIvera` (Arcade Port & 100% Zero-Disk Runtime Engine — Release v1.9-iivera)
 2. `C:\dev\veratest` (7-in-1 Flagship Test Suite & 32MB 375-Image Mode 7 Slideshow Engine, with YM2151 (OPM) FM audio — Release v0.0.5)
@@ -15,7 +20,7 @@
 
 - [Apple II VERA Development — Master Session Summary \& Architecture Guide](#apple-ii-vera-development--master-session-summary--architecture-guide)
   - [📋 Master Table of Contents](#-master-table-of-contents)
-  - [1. Executive Repository Status](#1-executive-repository-status)
+  - [1. Executive Repository Status](#1-historical-repository-status-v005-baseline)
   - [2. Project 1: Time Pilot IIvera (`c:\dev\Time-Pilot\TimePilot-IIvera`)](#2-project-1-time-pilot-iivera-cdevtime-pilottimepilot-iivera)
     - [2.1 Overview \& High-Level Accomplishments](#21-overview--high-level-accomplishments)
     - [2.2 Zero-Disk Runtime Engine Architecture](#22-zero-disk-runtime-engine-architecture)
@@ -84,7 +89,7 @@
 
 ---
 
-## 1. Executive Repository Status
+## 1. Historical Repository Status (v0.0.5 baseline)
 
 | Repository | Path | Current Branch | HEAD Commit | Working Tree | Distribution Artifacts |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -380,7 +385,7 @@ cac3041 audio: Restore authentic Konami Stage Clear Ah~~~ vocal fanfare and opti
 `veratest` is the official, comprehensive hardware verification suite and demonstration package for the VERA FPGA card installed on Apple II computers, the [Apple2TS](https://apple2ts.com) web emulator, and the [AppleWin](https://github.com/anomixer/AppleWin) desktop emulator.
 
 Key features and deliverables in Release v0.0.5:
-1. **YM2151 (OPM) FM Audio Path (`src/vera_fm.inc`, `src/zsm2vera.mjs`)**: the FM chip is signature-probed at `$Cs20`/`$Cs21`, reset, written and silenced by every player, and the three X16 soundtracks keep their original PSG **and** FM parts. A card without the chip falls back to PSG only, flagged as `P` instead of `F`.
+1. **YM2151 (OPM) FM Audio Path (`src/vera_fm.inc`, `src/zsm2vera.mjs`)**: the FM chip is BUSY-probed at `YM_DATA` (`$C0A1` or `$C0C1`), reset, written and silenced by every player, and the three X16 soundtracks keep their original PSG **and** FM parts. A card without the chip falls back to PSG only, flagged as `P` instead of `F`.
 2. **7-in-1 Flagship Test Suite (`veratest.po`, 140KB bootable floppy)**: Complete hardware exercise across sprites, 4-voice polyphonic PSG sound, Mode 7 256-color RLE decoding, Mode 4 RPG tilemap with smooth wander camera, dual-layer parallax plasma starfield, The Matrix 256-color text code rain, and the *Sonic The Hedgehog: Green Hill Zone* port, which now plays the original PSG + FM arrangement; the sprite demo adds FM percussion.
 3. **32MB Fullscreen 375-Image Slideshow Engine (`slideshow.hdv`)**: File-level ProDOS streaming engine displaying 375 Mode 7 ($320 \times 240$ 8bpp) images and 375 custom palettes with continuous 60 Hz VERA VSYNC IRQ background music, plus **one master volume knob that moves PSG and FM together** (`+`/`=` and `-`/`_`, 0..15, default 12).
 4. **Direct Mode 7 Bitmap On-Screen Display (OSD) Overlay**: High-performance status bar rendered directly into bottom scanlines (Row 29) of Mode 7 VRAM with precomputed zero-noise palette LUTs, sub-13ms image backup/restore, space-free corner badges, and a pure image MUTE mode leaving 232 pixels untouched.
@@ -393,7 +398,7 @@ Key features and deliverables in Release v0.0.5:
 ---
 
 ### 3.2 Hardware Architecture & Dual-Port Slot Mapping
-VERA registers map into Apple II I/O space at `$C080 + ($10 * Slot)` and Slot ROM space at `$C000 + ($100 * Slot)`:
+VERA registers use /IO SELECT in Slot ROM space at `$C000 + ($100 * Slot)`:
 
 | Offset | Register Name | Description |
 | :--- | :--- | :--- |
@@ -410,11 +415,11 @@ VERA registers map into Apple II I/O space at `$C080 + ($10 * Slot)` and Slot RO
 | `+$0B` | `VERA_DC_VSCALE`| Vertical Scale (128 = 1.0x, 64 = 2.0x) |
 | `+$0C` | `VERA_DC_BORDER`| Border Color Index |
 | `+$0D` | `VERA_L0_CONFIG`| Layer 0 Configuration |
-| `+$20` | `YM_REG` | YM2151 register select (write-only; aliases `VERA_ADDR_L` when no FM chip is fitted) |
-| `+$21` | `YM_DATA` | YM2151 data write (aliases `VERA_ADDR_M` when no FM chip is fitted) |
+| FM `+$00` | `YM_SEL` | /DEVICE SELECT register select (Slot 2 $C0A0, Slot 4 $C0C0) |
+| FM `+$01` | `YM_DATA` | /DEVICE SELECT data write / status read (Slot 2 $C0A1, Slot 4 $C0C1) |
 
 #### Dual-Port Slot Probing in Applesoft BASIC (`startup.bas`)
-The `STARTUP` script automatically probes Slot 2 (`$C200`) and Slot 4 (`$C400`) by writing and reading back test patterns through `VERA_ADDR_L` (`$C0A0` vs `$C0C0`). It automatically launches the matching slot binary (`SPRITE.BIN` for Slot 2, `SPRITE4.BIN` for Slot 4). The same script probes the YM2151 through `$Cs20`/`$Cs21` and prints `STATUS: YM2151 (OPM) FM CHIP FOUND` or `STATUS: NO YM2151 (OPM) FM CHIP FOUND`.
+The `STARTUP` script automatically probes Slot 2 (`$C200`) and Slot 4 (`$C400`) by writing and reading back test patterns through VERA Cx registers (`$C200` vs `$C400`). It automatically launches the matching slot binary (`SPRITE.BIN` for Slot 2, `SPRITE4.BIN` for Slot 4). The same script calls an inline YM2151 BUSY probe at the matching C0 ports and prints `STATUS: YM2151 (OPM) FM CHIP FOUND` or `STATUS: NO YM2151 (OPM) FM CHIP FOUND`.
 
 ---
 
@@ -557,7 +562,7 @@ Three Commander X16 ZSM soundtracks (`SB-INTRO`, `CANYON`, `GREENHILL`) are conv
 - **PSG**: every voice level is scaled at play time as `(level * vol + 8) >> 4` with the pan bits carried through untouched; the 64-byte `PSG_SHADOW` keeps the unscaled stream values, so a volume change re-sends all 16 voices immediately.
 - **FM**: the OPM has no global volume register, so `FM_TL_BASE` (`$3B30`) mirrors the 32 operator total-level bytes (`$60..$7F`) and `FM_ATTEN_TAB` adds a TL offset with the same dB slope — `127, 32, 24, 19, 16, 14, 11, 10, 8, 7, 5, 4, 3, 2, 2, 0` for volumes 0..15 (0.75 dB per step; default 12 ≈ −2.25 dB, 15 = exactly as the tracker authored it, 0 = silent). `FM_APPLY_VOLUME` rewrites all 32 levels from that mirror under a short `SEI`.
 - **Hardware gotcha:** the total level is a **7-bit** field (`ymfm_opm.h` → `op_total_level` = `bitfield(0x60, 0, 7)`), so bit 7 of a stream byte has to be masked off *before* the offset is added. `GREENHILL` writes `$8A`/`$94`/`$9D` on its carriers; without the mask those looked "already above `$7F`" and were clamped to `$7F` — maximum attenuation, i.e. silence — which muted that track's whole FM half. AppleWin's `-fm-wav-dump` measured the YM2151 output as essentially zero before the fix and peak 13,676 (≈ −7.6 dBFS, about +13 dB) after it.
-- The YM2151 itself is detected by writing `$5A`/`$A5` to `$Cs20`/`$Cs21` and reading them back: the values do not echo on a card without the chip, because those two apertures alias the VERA address latches.
+- The YM2151 is detected through a bounded BUSY assertion/clear probe at the matching C0 `YM_DATA` port; the BASIC launchers and assembly players share the same machine-code routine.
 
 ---
 
@@ -566,7 +571,7 @@ The build uses Node.js, the bundled Cadius executable (`tools/cadius.exe`), and 
 - `src/asm6502.mjs`: High-performance two-pass 6502 assembler. Correctly evaluates labels, equates, zero page vs absolute addressing, and injects slot base constants (`VERA_BASE = $C200` or `$C400`).
 - `src/applebasic.mjs` & `src/applebasic.inc`: Applesoft BASIC compiler that directly parses plain-text `startup.bas` into native Apple II binary memory-linked token streams (`NextPtr[2] + LineNo[2] + Tokens + 0x00`).
 - `src/zsm2vera.mjs`, `src/music_streams.mjs`, `src/verify_music_streams.mjs`: ZSM → VZM converter (PSG writes, batched YM2151 pairs, per-track balance), the build step that regenerates all three `/DATA/*.VZM` files for both images, and the tick-by-tick verifier.
-- `src/vera_fm.inc`: YM2151 detect (`$Cs20`/`$Cs21` signature), reset, register write, and key-off/key-restore helpers shared by every player.
+- `src/vera_fm.inc`: YM2151 detect (`YM_DATA` BUSY transition), reset, register write, and key-off/key-restore helpers shared by every player.
 - `src/veratest/veratest.mjs` and `src/slideshow/slideshow_hdv.mjs`: Both package ProDOS images with Cadius. Set `CADIUS` to override the bundled executable.
 - `build.bat`:
   ```cmd
@@ -970,7 +975,7 @@ The repository is completely standalone and requires only Node.js (ESM):
 | **Complete VRAM & Ghost Sprite Reset** | `SPRITE.BIN` / `SPRSND.BIN` | Apple2TS & AppleWin | `CLR_64K` clears all 128 sprite attribute slots and 128KB VRAM; zero ghost sprites | **PASS** |
 | **Native Display Return on Exit** | All Showcases (veratest) | AppleWin & Apple2TS | `VERA_DC_VID = 0` instantly restores Apple II text screen on single-monitor setups | **PASS** |
 | **32MB File-Level Image Streaming** | `slideshow.hdv` | Apple2TS & AppleWin | 375 images load from ProDOS catalog/index-resolved allocations via MLI $80; no fixed block assumptions; continuous 60 Hz VSYNC PSG + FM | **PASS** |
-| **YM2151 FM Chip Probe** | `STARTUP` / `slideshow.asm` | AppleWin (Slot 2) & Apple2TS | `$Cs20`/`$Cs21` signature echo separates FM from PSG-only; the `F` / `P` badge matches the probe | **PASS** |
+| **YM2151 FM Chip Probe** | `STARTUP` / `slideshow.asm` | AppleWin (Slot 2) & Apple2TS | Historical legacy signature test (superseded by the 2026-10-27 BUSY probe); the `F` / `P` badge matches the probe | **PASS** |
 | **PSG + FM VZM Playback** | `slideshow.hdv` | AppleWin (Slot 2 + S7 HD) | All three tracks carry PSG + FM; the FM records are skipped only when the chip is absent | **PASS** |
 | **PSG + FM Master Volume** | `slideshow.asm` | AppleWin | `+`/`=` and `-`/`_` move the PSG levels and all 32 OPM total levels together; ` VOL:nn` on row 24 | **PASS** |
 | **7-bit OPM Total Level** | `slideshow.asm` (`FM_ATTENUATE`) | AppleWin + `-fm-wav-dump` | `GREENHILL` FM audible again; YM2151 dump peaks at 13,676 (≈ −7.6 dBFS) instead of silence | **PASS** |
@@ -1035,5 +1040,16 @@ Historical environment snapshot from the September 2026 session; the `veratest` 
    - `verasdedit\AGENTS.md` (Complete 6502 hex editor architecture and VERA SD SPI debugging lessons)
    - `c:\dev\veratest\docs\vera-session.md` (This master document; current veratest status updated through October 25, 2026)
 
+## 8. Current veratest integration (2026-10-27)
 
+The v0.0.5 branch/commit table above is a historical baseline. Current guest
+builds use the C0 FM ports and shared bounded BUSY probe, preserve the user's
+24-row ABOUT layout, and ship rebuilt PO/HDV/ZIP artifacts. AppleWin's matching
+reset fix clears disabled-plane scanline caches to prevent vertical stripes.
 
+Validation: Cadius checks pass; 31,147 source music ticks match; Win32 runtime
+26/26, x64 smoke 2/2 and RGB/full-scanline follow-up 8/8 pass. AppleWin core
+checks now pass 26/26, including layer/sprite reset regressions. These changes
+were AI-assisted. See [the current developer guide](../AGENTS.md#2026-10-27-integration-and-verification)
+for the probe's memory contract, temporary QA image differences, longer Sonic
+load budget and remaining listening/interactive/physical-board checks.

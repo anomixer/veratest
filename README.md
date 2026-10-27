@@ -1,5 +1,10 @@
 # VERA Test Demo Disk & Slideshow for Apple II
 
+> **FM I/O update (2026-10-27, AI-assisted):** FM uses `/DEVICE SELECT`:
+> Slot 2 `$C0A0/$C0A1`, Slot 4 `$C0C0/$C0C1` (`YM_SEL` / `YM_DATA`).
+> VERA video/SD remain at `$C200/$C400`. Rebuild both images and use an
+> emulator with the new mapping; older FM mappings are not supported.
+
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/anomixer/veratest)
 [![Release](https://img.shields.io/github/v/release/anomixer/veratest?color=purple)](https://github.com/anomixer/veratest/releases)
 [![Apple2TS Compatible](https://img.shields.io/badge/Apple2TS-compatible-blue.svg)](https://apple2ts.com)
@@ -44,6 +49,22 @@ Fully compatible with [AppleWin](https://github.com/anomixer/AppleWin) (with VER
 
 ---
 
+## Current build and verification (2026-10-27)
+
+Both images contain the updated Slot 2/4 FM binaries and BASIC probes. The
+ABOUT page fits 24 rows (at most 39 characters, no final prompt newline).
+Cadius checks pass, all 31,147 music ticks match the source, and the matching
+AppleWin passes 26 Win32 runtime cases plus 2 x64 smoke cases. After its
+renderer reset fix, 8 additional RGB/full-scanline sound/Sonic/slideshow cases
+pass in both slots. Use the updated AppleWin to avoid stale layer/sprite
+pixels appearing as vertical stripes. Audio listening, controls and physical
+hardware still need human verification.
+
+The delivered slideshow retains its original playlist: SB-INTRO does not add
+FM until about 114 seconds; press **N** for CANYON to hear FM immediately.
+See [AGENTS.md](AGENTS.md#2026-10-27-integration-and-verification) for detailed
+coverage, build-time probe generation and temporary QA image differences.
+
 ## 🛠️ Modular Build System
 
 The Node.js toolchain compiles 6502 assembly and Applesoft BASIC from source. Both disk images are packaged with the bundled `tools/cadius.exe`. Set the `CADIUS` environment variable to use a different Cadius executable.
@@ -69,7 +90,8 @@ build.bat all
   - `applebasic.mjs`: Standalone Applesoft BASIC tokenizer and memory-linked binary compiler.
   - `applebasic.inc`: Applesoft BASIC keyword token definitions.
   - `vera.inc`: VERA register offsets and Apple II hardware softswitch constants.
-  - `vera_fm.inc`: YM2151 FM chip detect/reset/write/silence routines shared by every player.
+  - `vera_fm.inc`: YM2151 reset/write/silence routines shared by every player.
+  - `vera_fm_detect.inc` & `update_fm_probe.mjs`: shared BUSY probe and generated BASIC inline code.
   - `zsm2vera.mjs`: ZSM to VZM stream converter (PSG writes, batched FM register pairs, delays).
   - `music_streams.mjs`: Build-time SB-INTRO/CANYON/GREENHILL `.vzm` generation for the slideshow.
 - `src/veratest/`: Flagship 7-in-1 test suite & demo showcases:
@@ -109,7 +131,7 @@ To install the 7-in-1 suite on another ProDOS volume, copy `STARTUP`, all demo `
 
 For file-level installation on another ProDOS volume, copy the slideshow files and all four directories (`DATA`, `DATA1`, `DATA2`, and `DATA3`) together. The loader follows the active ProDOS prefix, so the app can run from a nested directory such as `/VERASD/SLIDESHOW/`.
 
-Three original X16 ZSM soundtracks (`SB-INTRO`, `CANYON`, and `GREENHILL`) are bundled and converted during the build into VERA PSG + YM2151 FM streams, in that order. The streams are stored as `SBINTRO.VZM`, `CANYON.VZM`, and `GREENHILL.VZM` under `/DATA`. Every ZSM tick is encoded as one record: a PSG write, a batched YM2151 register-pair block, or a delay, so the FM arrangement is preserved instead of being discarded. The YM2151 key register `$08` is passed through byte-for-byte: it is an **operator mask in bits 6..3 plus the channel in bits 2..0**, the chip ignores bit 7, and a zero mask releases the operators, so the tracker's own key-on/key-off pairs drive the envelopes exactly as the original ZSM does (this is the same write stream `veramusic`'s melodius player forwards). Every tick of all three songs was compared against the raw ZSM by replaying the PSG *and* FM writes and diffing the resulting register image: 0 mismatched ticks out of 3,192 / 7,570 / 20,385, with identical `$08` write sequences. On startup the program probes `$Cs20`/`$Cs21` for the FM chip. With the FM chip the player forwards the YM2151 writes to `$Cs20`/`$Cs21`; without one it drops those records and plays exactly the PSG part. Music starts with the slideshow and advances from the VERA VSYNC IRQ at 60 Hz, so image loading does not alter its tempo; `M` toggles mute/playback, `N` selects the next soundtrack, and each song automatically advances to the next one at EOF (or a random soundtrack in Random mode). Switching tracks silences the PSG, resets the FM chip, and clears the stored key-on state before the new stream starts, so no residual notes survive a track change.
+Three original X16 ZSM soundtracks (`SB-INTRO`, `CANYON`, and `GREENHILL`) are bundled and converted during the build into VERA PSG + YM2151 FM streams, in that order. The streams are stored as `SBINTRO.VZM`, `CANYON.VZM`, and `GREENHILL.VZM` under `/DATA`. Every ZSM tick is encoded as one record: a PSG write, a batched YM2151 register-pair block, or a delay, so the FM arrangement is preserved instead of being discarded. The YM2151 key register `$08` is passed through byte-for-byte: it is an **operator mask in bits 6..3 plus the channel in bits 2..0**, the chip ignores bit 7, and a zero mask releases the operators, so the tracker's own key-on/key-off pairs drive the envelopes exactly as the original ZSM does (this is the same write stream `veramusic`'s melodius player forwards). Every tick of all three songs was compared against the raw ZSM by replaying the PSG *and* FM writes and diffing the resulting register image: 0 mismatched ticks out of 3,192 / 7,570 / 20,385, with identical `$08` write sequences. On startup the program probes YM2151 BUSY at the slot's `YM_DATA` port. With the FM chip the player forwards the YM2151 writes to `YM_SEL`/`YM_DATA` (`$C0A0/$C0A1` or `$C0C0/$C0C1`); without one it drops those records and plays exactly the PSG part. Music starts with the slideshow and advances from the VERA VSYNC IRQ at 60 Hz, so image loading does not alter its tempo; `M` toggles mute/playback, `N` selects the next soundtrack, and each song automatically advances to the next one at EOF (or a random soundtrack in Random mode). Switching tracks silences the PSG, resets the FM chip, and clears the stored key-on state before the new stream starts, so no residual notes survive a track change.
 
 The source archive also contains other ZSM files; the packaged playlist is limited to the three tracks that were verified both as PSG and as FM arrangements.
 
@@ -136,13 +158,13 @@ The original X16 slideshow uses a hybrid sound system: VERA PSG plus a YM2151 (O
 | Feature | Commander X16 slideshow | Apple II VERA with FM Chip | Apple II VERA without FM Chip |
 | :--- | :--- | :--- | :--- |
 | VERA PSG | Up to 16 channels | 16 channels | 16 channels |
-| YM2151 FM | 8 FM channels; `CANYON.ZSM` contains data for all 8 | Same 8 channels, forwarded to `$Cs20`/`$Cs21` | FM absent; the FM records are skipped |
+| YM2151 FM | 8 FM channels; `CANYON.ZSM` contains data for all 8 | Same 8 channels, forwarded to `YM_SEL`/`YM_DATA` | FM absent; the FM records are skipped |
 | ZSM PSG writes | Played | Played | Played |
 | ZSM YM2151/FM writes | Played | Played (batched register pairs carried in the VZM stream) | Dropped during playback, not during conversion |
 | Audible result | Full hybrid PSG + FM arrangement | Full hybrid PSG + FM arrangement | PSG-only arrangement |
 | Master volume (`+`/`-`) | Mixer levels, set outside the program | One knob scales PSG and FM together (0..15, default 12) | Same knob, PSG only |
 
-The FM part is detected at startup by writing `$5A`/`$A5` to `$Cs20`/`$Cs21` and reading them back: if the bytes do not echo, the card has no FM chip and the two apertures are just the VERA address latches. Nothing is lost at build time either way — every ZSM tick is encoded in the VZM stream as a PSG write, a batched FM register pair or a delay, so the same `/DATA` files drive a card with or without the FM chip. The slideshow shows the result as an `F` (FM detected) or `P` (PSG only) marker next to the music name in the OSD and on the Apple II text page, and both `STARTUP` menus print the probe result as `STATUS: YM2151 (OPM) FM CHIP FOUND` or `STATUS: NO YM2151 (OPM) FM CHIP FOUND`.
+The FM part is detected at startup by a bounded YM2151 BUSY assertion/clear probe at `YM_DATA`, shared with the assembly players. Absent or disabled FM has floating-bus behavior rather than VERA latch aliases. Nothing is lost at build time either way — every ZSM tick is encoded in the VZM stream as a PSG write, a batched FM register pair or a delay, so the same `/DATA` files drive a card with or without the FM chip. The slideshow shows the result as an `F` (FM detected) or `P` (PSG only) marker next to the music name in the OSD and on the Apple II text page, and both `STARTUP` menus print the probe result as `STATUS: YM2151 (OPM) FM CHIP FOUND` or `STATUS: NO YM2151 (OPM) FM CHIP FOUND`.
 
 #### X16 Slideshow Music Porting Status
 
@@ -217,4 +239,3 @@ Special thanks to the original creators, engineers, and contributors whose work 
 ## 📄 License
 
 MIT License © 2026 [anomixer](https://github.com/anomixer).
-

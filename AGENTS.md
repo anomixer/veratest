@@ -1,5 +1,11 @@
 # VERA Test Demo for Apple II — Developer & Agent Guide
 
+> **FM I/O update (2026-10-27, AI-assisted):** FM uses `/DEVICE SELECT`:
+> Slot 2 `$C0A0/$C0A1`, Slot 4 `$C0C0/$C0C1` (`YM_SEL` / `YM_DATA`).
+> VERA video/SD remain at `$C200/$C400`. Rebuild both images and use an
+> emulator with the new mapping; older FM mappings are not supported.
+
+
 This document serves as the comprehensive architectural reference, hardware specification, and development history for the **`veratest`** repository.
 
 ---
@@ -20,7 +26,7 @@ This document serves as the comprehensive architectural reference, hardware spec
 ## ⚙️ 2. VERA Hardware Architecture on Apple II
 
 ### 2.1 I/O Slot Mapping
-The VERA registers map to the Apple II Slot I/O space at `$C080 + ($10 * Slot)` or Slot ROM space `$C000 + ($100 * Slot)`:
+The VERA registers use /IO SELECT at `$C000 + ($100 * Slot)`. The separate FM ports use /DEVICE SELECT at `$C080 + ($10 * Slot)`:
 
 | Offset | Register Name | Description |
 | :--- | :--- | :--- |
@@ -51,14 +57,14 @@ The VERA registers map to the Apple II Slot I/O space at `$C080 + ($10 * Slot)` 
 - `$1FC00 - $1FFFF`: 128 Sprite Attribute Entries (8 bytes per sprite $\times$ 128 = 1024 bytes).
 
 ### 2.3 YM2151 (OPM) FM Chip
-The VERA EV1 board has the YM2151 (OPM) FM core built in. When the chip is not present, the two FM aperture bytes alias the VERA address registers, which is exactly how software detects it:
+The VERA EV1 board supports a YM2151 (OPM) FM daughterboard on the separate /DEVICE SELECT region. Absent or disabled FM leaves floating-bus I/O:
 
 | Register | Offset | Description |
 | :--- | :--- | :--- |
-| `YM_REG`  | `VERA_BASE + $20` | YM2151 register select (aliases `VERA_ADDR_L` when no FM chip is fitted) |
-| `YM_DATA` | `VERA_BASE + $21` | YM2151 data write (aliases `VERA_ADDR_M` when no FM chip is fitted) |
+| `YM_SEL` | `FM_BASE + $00` | YM2151 register select (write only) |
+| `YM_DATA` | `FM_BASE + $01` | YM2151 data write / status read (bit 7 = BUSY) |
 
-Detection saves `$Cs20`/`$Cs21`, writes `$5A`/`$A5`, reads both back, and compares. Equal means the bytes are plain VERA latches, so there is no FM chip; otherwise the chip is there and the writes go through. The saved values are then restored.
+Detection rejects nonzero reserved status bits, waits for idle with a timeout, clears timer flags with register `$14=$30`, requires BUSY (`$80`) immediately after the write, then requires status `$00` within a bounded wait. No VERA pointer register is touched. `FM_BASE` is injected by the assembler from the selected slot. This is a BUSY/status probe; it is not an identification register and must still be checked on physical hardware.
 
 The FM chip is programmed with `$08` key on/off (**operator mask in bits 6..3, channel in bits 2..0 — bit 7 is ignored by the chip, a zero mask releases the operators**), `$20+ch` pan/feedback/algorithm, `$28+ch`/`$30+ch` key code/fraction, and the per-operator blocks at `$40`, `$60`, `$80`, `$A0`, `$C0`, `$E0` (offset `(operator * 8) + channel`). `src/vera_fm.inc` provides `VERA_FM_DETECT`, `VERA_FM_RESET`, `VERA_FM_WRITE` (which also tracks the last `$08` value per channel so the caller can silence everything on exit) and `VERA_FM_KEY_OFF_ALL` / `VERA_FM_RESTORE_KEYS`.
 
@@ -82,7 +88,7 @@ The sound demo in `SPRSND.BIN` runs a 32-step arcade chiptune engine written in 
 
 - The kick is not a static tone: `FM_DRUM_TICK` advances the soundtrack's pitch dive once per video frame, walking key code `32 → 2A → 22 → 1A → 12 → 0A → 02` and key fraction `68 → 78 → 88 → 98 → A8 → B8 → C8` over six frames after the key-on, exactly like the ZSM's channel-2 writes. `FM_KICK_IDX` holds the next dive step (0 = idle).
 - Each hit is re-keyed the way the tracker does it: `$08` with mask 0 first (release), then the new key code/fraction, then `$08` with mask `$0F` (key on).
-- Without an FM chip `FM_PRESENT` stays 0, no `$Ct20`/`$Ct21` write is issued, and the music is the plain 4-voice PSG arrangement.
+- Without an FM chip `FM_PRESENT` stays 0, no FM playback write is issued after detection, and the music is the plain 4-voice PSG arrangement.
 - On exit the FM key registers are silenced through `VERA_FM_KEY_OFF_ALL`, so returning to BASIC does not leave a note ringing.
 
 The slide show's own VZM streams still carry every FM note of `SB-INTRO`, `CANYON` and `GREENHILL`; only demo 2's hand-written engine is drums-only.
@@ -349,5 +355,58 @@ Raw `.ZSM` playback on the Apple II is also possible (that is what `veramusic`'s
     - That fix was verified from the chip's own output instead of by ear: a test volume whose first track is the `GREENHILL` stream, run headless in AppleWin with `-fm-wav-dump`, produces an almost all-zero WAV before the fix and peaks at 13,676 (≈ −7.6 dBFS) after it — about +13 dB, FM present for the whole loop. The regenerated `src/slideshow/data/greenhill.vzm` is byte-identical to the committed one (SHA256 `D5675A0F…679AC1BC5`), so the stream itself was never the problem.
     - Headless AppleWin verification (slot 2 VERA, 24 M cycles, `-save-state` + `-vera-dump`): the default run reports `MUSIC_VOL = 12`, `FM_ATTEN = 3`, `MUSIC_MUTE = 0`, the PSG block `$1F9C0..` holding live voice data with the pan bits intact, `MUSIC_NEXT_READY = 1` (prefetch running) and the text page showing `MUSIC:SB-INTRO F VOL:12      IMG:004/375`. `FM_TL_BASE` and `FM_KEYS` are still all-zero at that point because `SB-INTRO`'s FM arrangement only enters at stream offset 31,232 (~114 s at ≈274 B/s), so the first minutes of track 1 are PSG-only *by content* — `CANYON` and `GREENHILL` carry FM from the first tick.
 
+## 2026-10-27 integration and verification
 
+This update was implemented with AI assistance and includes the user's BASIC
+ABOUT edits. All FM players use `FM_BASE = $C080 + slot*$10`; the VERA register
+base remains `$C000 + slot*$100`. `src/vera_fm_detect.inc` is shared by the
+assembly players and both BASIC menus. Each image builder calls
+`updateFmProbe()` before tokenizing STARTUP, so its inline machine code stays
+in sync with the assembly probe. Do not hand-edit the generated DATA lines.
+The 71-byte probe runs at `$0300` and returns `FM_PRESENT` at `$02FF`; its
+build-time size guard keeps it below `$03F0`. The BASIC launchers select the
+Slot 2 or Slot 4 version according to the VERA probe result.
 
+Detection rejects reserved status bits, waits for idle, writes `$14=$30` to
+clear timer flags, then requires BUSY `$80` followed by ready `$00` within a
+bounded wait. No VERA pointer register is modified. This is a BUSY/status
+probe, not a chip identification register; physical-board testing is still
+needed. Absent/disabled FM uses floating-bus I/O in the matching AppleWin.
+
+Rebuild with `build.bat all`; deliver `veratest.po`, `slideshow.hdv` and the
+matching `slideshow.hdv.zip`. The ABOUT page remains 24 PRINT rows, with a
+maximum of 39 characters and no final newline on the key prompt. The floppy
+has one free block after packaging. Both slot binaries are included in each
+image; all seven demos were rebuilt.
+
+| Validation | Result |
+|---|---|
+| Cadius image checks and ZIP comparison | Both volumes pass; ZIP matches HDV |
+| `node src/verify_music_streams.mjs` | 31,147 ticks, zero mismatches |
+| Win32 emulator matrix | 26/26: all seven demos in both slots with FM; menus, sound demo, Sonic and slideshow also without FM |
+| x64 emulator smoke tests | 2/2: Slot 2 menu/probe and Slot 4 slideshow |
+| RGB/full-scanline follow-up after the AppleWin reset fix | 8/8: sound demo, Sonic, slideshow, FM-off slideshow; both slots |
+| Companion AppleWin Release builds and core tests | Win32/x64 build; 26/26 core checks |
+
+Runtime assertions checked BASIC/assembly FM flags, populated VRAM and nonzero
+stereo WAV captures. Sonic required 50M CPU cycles for its longer floppy load.
+Temporary QA disk copies preselected menu choices; slideshow QA used CANYON
+first to exercise FM immediately. Delivered images retain their menus and
+original track order; SB-INTRO starts FM around 114 seconds. Audio listening,
+interactive controls and physical-board behavior still need human verification.
+
+The vertical stripes reported in `err.png` were an AppleWin renderer reset
+bug: disabled layer/sprite line buffers could retain uninitialized or old
+pixels. The companion fix clears line buffers and rebuilds derived properties;
+two core regression cases check every pixel after reset. Use the updated
+AppleWin executable with these images. No bitmap assets or music streams were
+changed for this display fix. Earlier dated results in this document describe
+the corresponding historical build.
+
+### Slideshow code-size boundary
+
+The current slideshow binary ends at `$3B29`; its FM total-level shadow starts
+at `$3B30` and the disk block buffer starts at `$3C00`. Keep assembled code and
+included font/palette tables below **both** regions when extending the probe
+or player; the existing `$3C00` builder guard alone does not protect the closer
+FM shadow. Relocate runtime storage before adding code that reaches `$3B30`.

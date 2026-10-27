@@ -37,11 +37,10 @@ VERA_L1_HSC_H = VERA_BASE + $18  ; Layer 1 H-Scroll High
 VERA_L1_VSC_L = VERA_BASE + $19  ; Layer 1 V-Scroll Low
 VERA_L1_VSC_H = VERA_BASE + $1A  ; Layer 1 V-Scroll High
 
-; Optional FM Daughterboard (Yamaha YM2151 / OPM2151)
-; Only decoded when the card's FM option is enabled; otherwise these offsets
-; alias the VERA_ADDR_L / VERA_ADDR_M registers (see vera_fm.inc detection).
-YM_REG        = VERA_BASE + $20  ; YM2151 register select (write only while FM on)
-YM_DATA       = VERA_BASE + $21  ; YM2151 data write / status read (bit 7 = busy)
+; Optional FM Daughterboard: /DEVICE SELECT ($C080 + slot*$10).
+; Slot 2: $C0A0/$C0A1. Slot 4: $C0C0/$C0C1. No Cx alias probe.
+YM_SEL        = FM_BASE + $00  ; YM2151 register select (write only)
+YM_DATA       = FM_BASE + $01  ; YM2151 data write / status read (bit 7 = busy)
 
 ; Apple II Hardware Softswitches
 KBD_DATA      = $C000            ; Read Keyboard Data (Bit 7 = Key pressed)

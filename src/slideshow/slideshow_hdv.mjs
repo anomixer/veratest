@@ -5,6 +5,7 @@ import { execFileSync } from "child_process"
 import { fileURLToPath } from "url"
 import { assembleAsmFile } from "../asm6502.mjs"
 import { compileApplesoftBasic } from "../applebasic.mjs"
+import { updateFmProbe } from "../update_fm_probe.mjs"
 import { buildMusicStreams } from "../music_streams.mjs"
 import { generateSlideshowPreviewPng } from "./preview.mjs"
 
@@ -84,6 +85,7 @@ for (const [name, binary] of [["SLIDESHOW.BIN", slideshow2], ["SLIDSHW4.BIN", sl
 
 // 2. Compile Applesoft BASIC Startup Menu
 console.log("  ⚙️ Compiling STARTUP BASIC script...")
+updateFmProbe()
 const startup = compileApplesoftBasic(slideshowDir, "startup.bas")
 
 // 3. Build the HDV through Cadius. Let the ProDOS-aware utility create file

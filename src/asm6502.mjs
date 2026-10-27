@@ -417,6 +417,7 @@ export const assembleAsmFile = (srcDir, filename, slot = 2, startAddress = 0x200
   const baseAddress = 0xC000 + slot * 0x100
   const combinedLines = [
     `VERA_BASE = $${hex(baseAddress)}`,
+    `FM_BASE = $${hex(0xC080 + slot * 0x10)}`,
     ...veraIncLines,
     ...resolvedFileLines,
     ...extraLines
