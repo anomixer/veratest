@@ -13,6 +13,8 @@
 
 Interactive 7-in-1 test suite and 375-image fullscreen 256-color slideshow for the **VERA (Versatile Embedded Retro Adapter)** FPGA expansion card on **Apple II** computers (compatible with both [Apple2TS](https://apple2ts.com) web emulator and [AppleWin](https://github.com/anomixer/AppleWin) emulator with VERA card).
 
+> 🌐 **Landing page:** [anomixer.github.io/veratest](https://anomixer.github.io/veratest/) — one click boots either image in Apple2TS (VERA in slot 2), streaming it straight from this repository. The page lives in [`docs/index.html`](docs/index.html).
+
 | 🎮 7-in-1 Flagship Test Suite (`veratest.po`) | 🖼️ 32MB 375-Image Slideshow (`slideshow.hdv`) |
 | :---: | :---: |
 | ![VERA Test Demo](veratest.png) | ![VERA Slideshow Demo](slideshow.png) |

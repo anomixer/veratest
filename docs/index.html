@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>VERA Test — Apple II VERA demo suite &amp; 375-image slideshow</title>
+<meta name="description" content="A 7-in-1 VERA test suite on a 140 KiB floppy and a 32 MiB slideshow with 375 fullscreen Mode 7 images, PSG chiptune and YM2151 FM — pure 6502, streaming from ProDOS. Play both in Apple2TS." />
+<link rel="canonical" href="https://anomixer.github.io/veratest/" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="VERA Test — Apple II VERA demos" />
+<meta property="og:description" content="Seven 6502 demos and a 375-image Mode 7 slideshow for the VERA card on Apple II. Boot both in Apple2TS straight from this repository." />
+<meta property="og:url" content="https://anomixer.github.io/veratest/" />
+<meta property="og:image" content="https://anomixer.github.io/veratest/assets/slideshow.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="theme-color" content="#06060b" />
+<link rel="icon" href="assets/logo.svg" type="image/svg+xml" />
+<style>
+  :root {
+    --bg: #06060b;
+    --panel: #0f0f18;
+    --panel-2: #14141f;
+    --line: #232338;
+    --line-soft: #1a1a29;
+    --text: #ececf5;
+    --muted: #a2a2b8;
+    --magenta: #ff3ea5;
+    --cyan: #39d5ff;
+    --amber: #ffc45c;
+    --radius: 16px;
+    --maxw: 1120px;
+    --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.62;
+    background:
+      radial-gradient(1100px 560px at 82% -12%, rgba(255, 62, 165, .16), transparent 62%),
+      radial-gradient(900px 520px at 4% -4%, rgba(57, 213, 255, .13), transparent 60%),
+      var(--bg);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  a { color: inherit; }
+
+  :focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; border-radius: 4px; }
+
+  section, footer { scroll-margin-top: 76px; }
+
+  img, svg { max-width: 100%; }
+  code {
+    font-family: var(--mono); font-size: .88em; color: #dcdcee;
+    background: rgba(57, 213, 255, .08); border: 1px solid var(--line-soft);
+    padding: 1px 5px; border-radius: 5px;
+  }
+
+  .wrap { width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  .skip {
+    position: absolute; left: 12px; top: -60px; z-index: 20;
+    padding: 10px 14px; border-radius: 10px; background: var(--magenta); color: #14000b;
+    font-weight: 700; text-decoration: none; transition: top .15s ease;
+  }
+  .skip:focus { top: 12px; }
+
+  /* ---------- header ---------- */
+
+  .site-header {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(6, 6, 11, .72);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .site-header .wrap {
+    display: flex; align-items: center; justify-content: space-between; gap: 20px;
+    height: 62px;
+  }
+  .brand { display: inline-flex; align-items: center; gap: 11px; text-decoration: none; }
+  .brand img { width: 30px; height: 30px; display: block; }
+  .brand span {
+    font-family: var(--mono); font-size: 13px; font-weight: 700;
+    letter-spacing: .22em; text-transform: uppercase;
+  }
+  .brand small {
+    display: block; font-size: 10px; letter-spacing: .14em; color: var(--muted);
+    font-weight: 500; margin-top: 1px;
+  }
+
+  .nav { display: flex; align-items: center; gap: 22px; overflow-x: auto; }
+  .nav a {
+    font-size: 13.5px; color: var(--muted); text-decoration: none; white-space: nowrap;
+    padding: 6px 0; border-bottom: 1px solid transparent; transition: color .15s ease, border-color .15s ease;
+  }
+  .nav a:hover { color: var(--text); border-bottom-color: var(--cyan); }
+  .nav a.gh { color: var(--text); font-family: var(--mono); font-size: 12px; letter-spacing: .06em; }
+
+  /* ---------- hero ---------- */
+
+  .hero { padding: 74px 0 30px; }
+  .hero-grid {
+    display: grid; grid-template-columns: 1.06fr .94fr; gap: 56px; align-items: center;
+  }
+  .hero-grid > * { min-width: 0; }
+
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 9px; margin: 0 0 22px;
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: .2em; text-transform: uppercase;
+    color: var(--cyan);
+  }
+  .eyebrow .dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--cyan);
+    box-shadow: 0 0 0 4px rgba(57, 213, 255, .16);
+  }
+
+  h1 {
+    margin: 0 0 20px; font-size: clamp(2.5rem, 5.6vw, 4.05rem);
+    line-height: 1.04; letter-spacing: -.035em; font-weight: 800;
+    text-wrap: balance;
+  }
+  .grad {
+    background: linear-gradient(100deg, var(--magenta), var(--amber) 55%, var(--cyan));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+
+  .lede { margin: 0; max-width: 55ch; color: var(--muted); font-size: 1.06rem; }
+  .lede strong { color: var(--text); font-weight: 600; }
+
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 13px 18px; border-radius: 12px; text-decoration: none;
+    font-size: 14.5px; font-weight: 650; letter-spacing: -.01em;
+    border: 1px solid transparent; transition: transform .15s ease, filter .15s ease, border-color .15s ease, color .15s ease;
+  }
+  .btn .tag {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+    padding: 3px 7px; border-radius: 999px; opacity: .8;
+  }
+  .btn.primary {
+    background: linear-gradient(135deg, var(--magenta), #ff7a3d); color: #150009;
+    box-shadow: 0 16px 38px -18px rgba(255, 62, 165, .9);
+  }
+  .btn.primary .tag { background: rgba(0, 0, 0, .18); }
+  .btn.secondary {
+    background: rgba(21, 21, 33, .7); border-color: var(--line); color: var(--text);
+  }
+  .btn.secondary .tag { background: rgba(57, 213, 255, .12); color: var(--cyan); }
+  .btn:hover { transform: translateY(-2px); filter: brightness(1.06); }
+  .btn.secondary:hover { border-color: var(--cyan); }
+  .btn.flat { background: none; border-color: var(--line); color: var(--muted); font-weight: 550; padding: 11px 14px; font-size: 13px; }
+  .btn.flat:hover { color: var(--text); border-color: var(--line); transform: none; }
+
+  .hint { margin: 16px 0 0; font-size: 12.5px; color: #85859c; max-width: 52ch; }
+
+  .hero-shot {
+    margin: 0; padding: 10px; border-radius: 18px;
+    background: linear-gradient(180deg, rgba(255, 62, 165, .16), rgba(57, 213, 255, .1) 55%, transparent);
+    border: 1px solid var(--line);
+    box-shadow: 0 30px 70px -40px rgba(0, 0, 0, .95);
+  }
+  .hero-shot img {
+    display: block; width: 100%; height: auto; border-radius: 10px;
+    image-rendering: pixelated; background: #000;
+  }
+  .hero-shot figcaption {
+    display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 10px 6px 2px;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase;
+    color: #8f8fa6;
+  }
+  .hero-shot figcaption b { color: var(--amber); font-weight: 600; }
+
+  /* ---------- sections ---------- */
+
+  section { padding: 58px 0; }
+
+  .section-head { max-width: 62ch; margin-bottom: 30px; }
+  .kicker {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .2em; text-transform: uppercase;
+    color: var(--magenta); margin: 0 0 10px;
+  }
+  h2 { margin: 0 0 12px; font-size: clamp(1.65rem, 3.1vw, 2.25rem); letter-spacing: -.022em; line-height: 1.15; text-wrap: balance; }
+  .section-head p { margin: 0; color: var(--muted); }
+
+  .rule { height: 1px; background: linear-gradient(90deg, var(--line), transparent); margin: 0; border: 0; }
+
+  /* ---------- image cards ---------- */
+
+  .image-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .image-grid > * { min-width: 0; }
+
+  .image-card {
+    display: flex; flex-direction: column; overflow: hidden;
+    background: linear-gradient(180deg, var(--panel), var(--panel-2));
+    border: 1px solid var(--line); border-radius: var(--radius);
+    transition: border-color .18s ease, transform .18s ease;
+  }
+  .image-card:hover { border-color: #34344f; transform: translateY(-2px); }
+
+  .image-card-head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 14px;
+    padding: 20px 22px 0;
+  }
+  .image-card-head h3 { margin: 0; font-family: var(--mono); font-size: 1.05rem; letter-spacing: -.01em; }
+  .size {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--amber); white-space: nowrap;
+  }
+
+  .image-card figure { margin: 16px 0 0; }
+  .image-card figure img {
+    display: block; width: 100%; height: auto; image-rendering: pixelated;
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  }
+
+  .image-card-body { padding: 18px 22px 0; }
+  .image-card-body p { margin: 0 0 14px; color: var(--muted); font-size: .95rem; }
+
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+  .tags li {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+    color: #9d9db5; border: 1px solid var(--line); border-radius: 999px; padding: 4px 9px;
+  }
+
+  .image-card-actions {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    padding: 18px 22px 22px; margin-top: auto;
+  }
+
+  /* ---------- demos ---------- */
+
+  .demo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; }
+
+  .demo {
+    position: relative; padding: 22px 22px 20px; border-radius: 14px;
+    background: linear-gradient(180deg, rgba(20, 20, 32, .92), rgba(15, 15, 24, .92));
+    border: 1px solid var(--line); overflow: hidden;
+    transition: border-color .18s ease, transform .18s ease;
+  }
+  .demo:hover { border-color: #34344f; transform: translateY(-2px); }
+  .demo::after {
+    content: ""; position: absolute; inset: 0 0 auto 0; height: 2px;
+    background: linear-gradient(90deg, var(--magenta), var(--amber), var(--cyan));
+    opacity: .55;
+  }
+  .demo .num {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .18em; color: var(--magenta);
+  }
+  .demo h3 { margin: 6px 0 8px; font-size: 1.02rem; letter-spacing: -.012em; }
+  .demo p { margin: 0; color: var(--muted); font-size: .9rem; }
+
+  /* ---------- slideshow / controls ---------- */
+
+  .two-col { display: grid; grid-template-columns: 1.1fr .9fr; gap: 26px; align-items: start; }
+  .two-col > * { min-width: 0; }
+
+  .keys {
+    list-style: none; margin: 0; padding: 8px 22px 20px;
+    background: linear-gradient(180deg, var(--panel), var(--panel-2));
+    border: 1px solid var(--line); border-radius: var(--radius);
+  }
+  .keys li {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 11px 0; border-bottom: 1px solid var(--line-soft); font-size: .92rem; color: var(--muted);
+  }
+  .keys li:last-child { border-bottom: 0; }
+  .keys .combo { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
+  kbd {
+    font-family: var(--mono); font-size: 11px; line-height: 1;
+    padding: 5px 7px; border-radius: 6px; color: #fff;
+    background: #1b1b29; border: 1px solid #303048; border-bottom-width: 2px;
+    white-space: nowrap;
+  }
+
+  .panel {
+    padding: 22px; border-radius: var(--radius);
+    background: linear-gradient(180deg, var(--panel), var(--panel-2));
+    border: 1px solid var(--line);
+  }
+  .panel h3 { margin: 0 0 10px; font-size: 1rem; letter-spacing: -.01em; }
+  .panel p { margin: 0 0 12px; color: var(--muted); font-size: .92rem; }
+  .panel p:last-child { margin-bottom: 0; }
+  .status-line {
+    display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 0;
+    font-family: var(--mono); font-size: 11px; letter-spacing: .04em; color: #cfcfe2;
+  }
+  .status-line span {
+    padding: 5px 8px; border-radius: 6px; background: #08080e; border: 1px solid var(--line);
+  }
+  .status-line span b { color: var(--cyan); font-weight: 600; }
+
+  /* ---------- how it works ---------- */
+
+  .feat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .feat-grid > * { min-width: 0; }
+  .feat {
+    padding: 22px; border-radius: 14px; border: 1px solid var(--line);
+    background: rgba(13, 13, 21, .8);
+  }
+  .feat .tag {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--cyan);
+  }
+  .feat h3 { margin: 8px 0 8px; font-size: 1.02rem; letter-spacing: -.012em; }
+  .feat p { margin: 0; color: var(--muted); font-size: .92rem; }
+
+  /* ---------- build ---------- */
+
+  .code {
+    margin: 0 0 18px; padding: 20px 22px; overflow-x: auto;
+    background: #08080e; border: 1px solid var(--line); border-radius: 14px;
+    font-family: var(--mono); font-size: 12.8px; line-height: 1.75; color: #d5d5e6;
+  }
+  .code .c { color: #6f6f88; }
+  .code .p { color: var(--cyan); }
+  .code .s { color: var(--amber); }
+  .build-notes { margin: 0; padding-left: 20px; color: var(--muted); font-size: .92rem; }
+  .build-notes li { margin-bottom: 6px; }
+  .build-notes code { font-family: var(--mono); font-size: .86em; color: var(--text); }
+
+  /* ---------- footer ---------- */
+
+  .site-footer {
+    margin-top: 30px; padding: 34px 0 46px;
+    border-top: 1px solid var(--line-soft);
+    font-size: 13px; color: #8b8ba2;
+  }
+  .footer-top { display: flex; flex-wrap: wrap; gap: 18px 34px; justify-content: space-between; }
+  .footer-links { display: flex; flex-wrap: wrap; gap: 18px; }
+  .footer-links a { text-decoration: none; border-bottom: 1px solid transparent; }
+  .footer-links a:hover { color: var(--text); border-bottom-color: var(--line); }
+  .credits { margin: 18px 0 0; max-width: 78ch; font-size: 12.5px; color: #7c7c93; }
+  .credits a { color: #9d9db5; text-decoration: none; }
+  .credits a:hover { color: var(--cyan); }
+
+  /* ---------- responsive ---------- */
+
+  @media (max-width: 900px) {
+    .hero { padding-top: 46px; }
+    .hero-grid { grid-template-columns: 1fr; gap: 34px; }
+    .image-grid, .two-col, .feat-grid { grid-template-columns: 1fr; }
+    .nav a:not(.gh):not(.play) { display: none; }
+  }
+
+  @media (max-width: 560px) {
+    .wrap { padding: 0 18px; }
+    section { padding: 42px 0; }
+    .site-header .wrap { height: 56px; }
+    .brand small { display: none; }
+    .keys { padding-left: 16px; padding-right: 16px; }
+    .keys li { align-items: flex-start; flex-direction: column; gap: 6px; }
+    .keys .combo { justify-content: flex-start; }
+    .btn { width: 100%; justify-content: space-between; }
+    .image-card-actions .btn { width: auto; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="./">
+      <img src="assets/logo.svg" alt="" width="30" height="30" />
+      <span>VERA Test<small>Apple II · 6502</small></span>
+    </a>
+    <nav class="nav" aria-label="Page sections">
+      <a href="#images">Images</a>
+      <a href="#demos">Demos</a>
+      <a href="#slideshow">Slideshow</a>
+      <a href="#how">How it works</a>
+      <a href="#build">Build</a>
+      <a class="gh" href="https://github.com/anomixer/veratest">GitHub ↗</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <p class="eyebrow"><span class="dot"></span>A2VERA · Apple //e · pure 6502</p>
+        <h1>Two disks.<br />One <span class="grad">VERA</span> card.</h1>
+        <p class="lede">
+          A <strong>7-in-1 test suite</strong> on a 140 KiB floppy and a <strong>32 MiB slideshow</strong> with
+          375 fullscreen Mode 7 images, PSG chiptune and YM2151 FM — written in pure 6502 and streaming
+          straight from ProDOS. Both boot here, in your browser.
+        </p>
+
+        <div class="cta">
+          <a class="btn primary" href="https://apple2ts.com/?theme=dark&amp;slot2=vera&amp;tab=vera#https://raw.githubusercontent.com/anomixer/veratest/main/veratest.po" target="_blank" rel="noopener">
+            ▶ Run veratest.po <span class="tag">Apple2TS</span>
+          </a>
+          <a class="btn secondary" href="https://apple2ts.com/?theme=dark&amp;slot2=vera&amp;tab=vera#https://raw.githubusercontent.com/anomixer/veratest/main/slideshow.hdv" target="_blank" rel="noopener">
+            ▶ Run slideshow.hdv <span class="tag">Apple2TS</span>
+          </a>
+        </div>
+
+        <p class="hint">
+          Opens Apple2TS in a new tab with the disk streamed from this repository — no download, VERA already
+          in slot 2, and the “VERA Monitor” tab showing the 640×480 output. On a machine without an FM chip the
+          sound falls back to PSG automatically.
+        </p>
+      </div>
+
+      <figure class="hero-shot">
+        <img src="assets/veratest.png" alt="VERA rainbow arc demo: a 256-colour Mode 7 rainbow with eight sprite aliens bouncing along it" width="560" height="384" />
+        <figcaption><span>veratest.po — demo 3</span><b>Mode 7 · 320×240 · 256 colours</b></figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="images">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">The two images</p>
+        <h2>One floppy, one hard disk</h2>
+        <p>
+          Both are bootable ProDOS 2.4.3 volumes with Slot 2 and Slot 4 binaries, a BASIC launcher that probes
+          the card, and no fixed block numbers — they run from the image, or from a directory on your own
+          ProDOS disk.
+        </p>
+      </div>
+
+      <div class="image-grid">
+        <article class="image-card">
+          <div class="image-card-head">
+            <h3>veratest.po</h3>
+            <span class="size">140 KiB · floppy</span>
+          </div>
+          <figure>
+            <img src="assets/veratest.png" alt="The seven-demo VERA test disk preview: rainbow arc with sprite aliens" width="560" height="384" loading="lazy" />
+          </figure>
+          <div class="image-card-body">
+            <p>
+              Seven demos behind one menu: sprites, a PSG + FM chiptune, the Mode 7 rainbow, a Mode 4 tilemap,
+              dual-layer parallax, the Matrix rain and Sonic’s Green Hill Zone.
+            </p>
+            <ul class="tags">
+              <li>6502</li><li>VERA PSG</li><li>YM2151 FM</li><li>Slot 2 / 4</li>
+            </ul>
+          </div>
+          <div class="image-card-actions">
+            <a class="btn primary" href="https://apple2ts.com/?theme=dark&amp;slot2=vera&amp;tab=vera#https://raw.githubusercontent.com/anomixer/veratest/main/veratest.po" target="_blank" rel="noopener">Play in Apple2TS</a>
+            <a class="btn flat" href="https://github.com/anomixer/veratest/releases/latest/download/veratest.po">Download .po</a>
+          </div>
+        </article>
+
+        <article class="image-card">
+          <div class="image-card-head">
+            <h3>slideshow.hdv</h3>
+            <span class="size">32 MiB · HDV</span>
+          </div>
+          <figure>
+            <img src="assets/slideshow.png" alt="Slideshow preview: a fullscreen 256-colour Mode 7 photo of a tiger" width="560" height="384" loading="lazy" />
+          </figure>
+          <div class="image-card-body">
+            <p>
+              375 Mode 7 images with 375 custom palettes, read block by block through ProDOS and pushed into
+              VERA VRAM. Three X16 soundtracks play as PSG + FM while the images stream.
+            </p>
+            <ul class="tags">
+              <li>375 images</li><li>MLI READ_BLOCK</li><li>VZM stream</li><li>OSD</li>
+            </ul>
+          </div>
+          <div class="image-card-actions">
+            <a class="btn primary" href="https://apple2ts.com/?theme=dark&amp;slot2=vera&amp;tab=vera#https://raw.githubusercontent.com/anomixer/veratest/main/slideshow.hdv" target="_blank" rel="noopener">Play in Apple2TS</a>
+            <a class="btn flat" href="https://github.com/anomixer/veratest/releases/latest/download/slideshow.hdv.zip">Download .zip</a>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <section id="demos">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">veratest.po · menu 1–7</p>
+        <h2>Seven demos in 140 KiB</h2>
+        <p>Every demo is its own 6502 binary, launched from the menu with the VERA base that matches the slot the probe found.</p>
+      </div>
+
+      <div class="demo-grid">
+        <article class="demo">
+          <span class="num">01</span>
+          <h3>16-Sprite Bouncing Alien</h3>
+          <p>4bpp crystal aliens on 16 hardware sprites, 2× scaling, bouncing off the screen border.</p>
+        </article>
+        <article class="demo">
+          <span class="num">02</span>
+          <h3>Sprites + PSG/FM Chiptune</h3>
+          <p>Four PSG voices — pulse lead, saw harmony, triangle bass, noise drums — with YM2151 kick and snare when the FM chip answers.</p>
+        </article>
+        <article class="demo">
+          <span class="num">03</span>
+          <h3>Real Rainbow Arc · Mode 7</h3>
+          <p>A fullscreen 256-colour 320×240 bitmap decompressed from an RLE stream in under a millisecond.</p>
+        </article>
+        <article class="demo">
+          <span class="num">04</span>
+          <h3>Mode 4 RPG Tilemap</h3>
+          <p>8×8 8bpp tiles, a centred castle landscape and a slowly wandering horizontal camera.</p>
+        </article>
+        <article class="demo">
+          <span class="num">05</span>
+          <h3>Dual-Layer Parallax</h3>
+          <p>Layer 0 starfield under Layer 1 plasma waves, scrolling at different depths like a 3D scene.</p>
+        </article>
+        <article class="demo">
+          <span class="num">06</span>
+          <h3>The Matrix Code Rain</h3>
+          <p>256-colour text mode with multi-speed palette cycling and live katakana glitch mutations.</p>
+        </article>
+        <article class="demo">
+          <span class="num">07</span>
+          <h3>Sonic · Green Hill Zone</h3>
+          <p>Dual-layer port with 4-frame sprites, water palette cycling, sunflower tile swaps and the original arrangement as PSG + FM.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <section id="slideshow">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">slideshow.hdv · 375 images</p>
+        <h2>A slideshow that streams, not loads</h2>
+        <p>
+          There is no 76,800-byte bitmap in Apple II RAM. The engine resolves each image’s ProDOS allocation,
+          then reads those blocks straight into VERA while the music keeps running from the VSYNC interrupt.
+        </p>
+      </div>
+
+      <div class="two-col">
+        <div>
+          <ul class="keys" aria-label="Slideshow controls">
+            <li><span>Next image</span><span class="combo"><kbd>→</kbd><kbd>↓</kbd><kbd>Space</kbd></span></li>
+            <li><span>Previous image</span><span class="combo"><kbd>←</kbd><kbd>↑</kbd><kbd>P</kbd></span></li>
+            <li><span>Auto-play every 3 s</span><span class="combo"><kbd>A</kbd></span></li>
+            <li><span>Random mode + auto-play</span><span class="combo"><kbd>R</kbd></span></li>
+            <li><span>Next soundtrack</span><span class="combo"><kbd>N</kbd></span></li>
+            <li><span>Status overlay on/off</span><span class="combo"><kbd>O</kbd></span></li>
+            <li><span>Mute / resume</span><span class="combo"><kbd>M</kbd></span></li>
+            <li><span>Master volume 0–15</span><span class="combo"><kbd>+</kbd><kbd>−</kbd></span></li>
+            <li><span>Back to BASIC</span><span class="combo"><kbd>Esc</kbd><kbd>Q</kbd></span></li>
+          </ul>
+        </div>
+
+        <aside class="panel">
+          <h3>What the status line tells you</h3>
+          <p>
+            The on-screen display draws two compact badges into the bottom scanlines, leaving the middle of the
+            picture untouched. Press <kbd>M</kbd> and the music badge disappears entirely, so only original
+            artwork remains.
+          </p>
+          <div class="status-line" aria-label="Example status line">
+            <span>MUSIC:SB-INTRO <b>F</b></span>
+            <span>VOL:12</span>
+            <span>IMG:004/375</span>
+          </div>
+          <p style="margin-top:14px">
+            <b>F</b> means the YM2151 answered and the full FM + PSG arrangement is playing; <b>P</b> means the
+            card is PSG-only. Playlist order is SB-INTRO, CANYON, GREENHILL — press <kbd>N</kbd> for CANYON if
+            you want FM from the first second, since SB-INTRO only introduces its FM part around 114 seconds.
+          </p>
+          <p>
+            The same numbers are written to the Apple II text page, so a single-monitor machine sees them too.
+          </p>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <section id="how">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">Under the hood</p>
+        <h2>Everything is 6502 and ProDOS MLI</h2>
+        <p>No patched emulator features, no host acceleration: the same binaries run on a real Apple IIe with a VERA card.</p>
+      </div>
+
+      <div class="feat-grid">
+        <article class="feat">
+          <span class="tag">ProDOS</span>
+          <h3>File-level streaming</h3>
+          <p>
+            The slideshow finds each <code>IMGnnn.BIN</code> and <code>VPALnnn.BIN</code> through its catalog
+            entry, reads the seedling/sapling index, and issues MLI <code>READ_BLOCK</code> on the allocated
+            blocks directly into VERA. Cadius allocates them dynamically, so nothing assumes contiguous data.
+          </p>
+        </article>
+        <article class="feat">
+          <span class="tag">Audio</span>
+          <h3>ZSM → VZM at build time</h3>
+          <p>
+            The X16 soundtracks are converted into VZM records: PSG writes, batched YM2151 register pairs and
+            delays. Every tick was replayed against the raw ZSM — 31,147 ticks, zero mismatches.
+          </p>
+        </article>
+        <article class="feat">
+          <span class="tag">PSG + FM</span>
+          <h3>One volume knob for both</h3>
+          <p>
+            A bounded BUSY probe detects the OPM at <code>$C0A0/$C0A1</code> or <code>$C0C0/$C0C1</code>. One
+            master volume scales the 16 PSG levels from a shadow table and rewrites all 32 FM total levels,
+            matched to the same amplitude law.
+          </p>
+        </article>
+        <article class="feat">
+          <span class="tag">Timing</span>
+          <h3>60 Hz music while images load</h3>
+          <p>
+            Two 512-byte tick buffers are prefetched from the IRQ midpoint, so block boundaries switch buffers
+            and keep decoding the same tick. A short read past EOF ends the track normally instead of muting.
+          </p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule" />
+
+  <section id="build">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">Build it</p>
+        <h2>Two commands, zero dependencies</h2>
+        <p>The 6502 assembler, the Applesoft compiler and the disk packagers are all in this repository.</p>
+      </div>
+
+      <pre class="code"><span class="c">REM needs Node.js; Cadius is bundled in tools/</span>
+git clone https://github.com/anomixer/veratest
+cd veratest
+
+<span class="p">build.bat</span> all                    <span class="c">REM veratest.po + slideshow.hdv + previews</span>
+<span class="p">node</span> src/verify_music_streams.mjs   <span class="c">REM replay all 31,147 music ticks</span></pre>
+
+      <ul class="build-notes">
+        <li><code>build.bat veratest</code> or <code>build.bat slideshow</code> builds a single target.</li>
+        <li>Set <code>CADIUS</code> to use a different Cadius executable.</li>
+        <li>The floppy keeps one free block; both Slot 2 and Slot 4 binaries are on every image.</li>
+        <li>Images also run in <a href="https://github.com/anomixer/AppleWin">AppleWin</a> with the VERA + YM2151 card, or on real hardware with the card in slot 2 or 4.</li>
+      </ul>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-top">
+      <div class="footer-links">
+        <a href="https://github.com/anomixer/veratest">Source on GitHub ↗</a>
+        <a href="https://github.com/anomixer/veratest/releases">Releases ↗</a>
+        <a href="https://github.com/anomixer/veratest#readme">README ↗</a>
+        <a href="https://github.com/anomixer/veratest/blob/main/docs/vera-session.md">Architecture guide ↗</a>
+        <a href="https://apple2ts.com/">Apple2TS ↗</a>
+      </div>
+      <div>MIT licensed · built with a two-pass 6502 assembler</div>
+    </div>
+    <p class="credits">
+      VERA is the FPGA video board from the Commander X16 project by
+      <a href="https://github.com/fvdhoef/vera-module">Frank van den Hoef</a>; the Apple II port and
+      <a href="https://apple2ts.com/">Apple2TS</a> emulator come from
+      <a href="https://github.com/ct6502">Chris Torrence</a> and contributors. Slideshow artwork by
+      <a href="https://github.com/ahenry3068">ahenry3068</a>; the Green Hill engine is
+      <a href="https://github.com/ZeroByteOrg/sonicdemo">ZeroByte</a>’s X16 demo; Mode 4 tilemap and Matrix
+      demos are from the <a href="https://github.com/X16Community/x16-demo">X16 demo collection</a>.
+      This site and the ports are fan work — the original games and music remain with their rights holders.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

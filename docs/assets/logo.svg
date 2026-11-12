@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="VERA Test">
+  <rect width="64" height="64" rx="15" fill="#0b0b14"/>
+  <rect x="1" y="1" width="62" height="62" rx="14" fill="none" stroke="#2a2a40"/>
+  <g fill="none" stroke-linecap="round">
+    <path d="M10 47a22 22 0 0 1 44 0" stroke="#ff3ea5" stroke-width="7"/>
+    <path d="M18 47a14 14 0 0 1 28 0" stroke="#ffc45c" stroke-width="6"/>
+    <path d="M25 47a7 7 0 0 1 14 0" stroke="#39d5ff" stroke-width="5"/>
+  </g>
+</svg>
