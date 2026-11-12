@@ -36,8 +36,13 @@ export const assemble6502 = (lines, startAddress = 0x2000, extraLabels = {}) => 
     }
 
     if (instr === "!WORD" || instr === ".WORD" || instr === "DW" || instr === "DA") {
-      const val = resolveVal(operand)
-      return [val & 0xFF, (val >> 8) & 0xFF]
+      const items = operand.split(/[\s,]+/).filter(Boolean)
+      const out = []
+      for (const it of items) {
+        const val = resolveVal(it)
+        out.push(val & 0xFF, (val >> 8) & 0xFF)
+      }
+      return out
     }
 
     if (instr === "HEX") {
